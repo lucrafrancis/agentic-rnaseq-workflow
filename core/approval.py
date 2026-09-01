@@ -58,7 +58,11 @@ def present_for_approval(
 
     print()
     while True:
-        choice = input("[a]pprove / [e]dit / [r]eject: ").strip().lower()
+        try:
+            raw = input("[a]pprove / [e]dit / [r]eject: ")
+        except EOFError:
+            return ApprovalResult(approved=False, reason="EOF on input")
+        choice = raw.strip().strip("\r\n").lower()
         if choice in ("a", "approve"):
             return ApprovalResult(approved=True)
         if choice in ("e", "edit"):
