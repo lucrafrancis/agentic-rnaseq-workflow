@@ -10,6 +10,9 @@ __pycache__/
 runs/
 examples/demo_fastqs/fastqs/
 examples/demo_fastqs/staged/
+examples/demo_fastqs/samplesheet.csv
+examples/nfcore_test/fastqs/
+examples/nfcore_test/samplesheet.csv
 
 # uv
 .uv/
