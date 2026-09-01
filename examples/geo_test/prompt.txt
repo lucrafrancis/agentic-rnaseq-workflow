@@ -1,0 +1,1 @@
+FASTQs are in ./examples/geo_test/fastqs. There's a metadata file at ./examples/geo_test/metadata.csv with sample information. This is Drosophila RNA-seq data from GEO (GSE225648). Use the metadata to map SRR accessions to meaningful sample names. Strandedness is auto (not specified in the study). Save the sample sheet to ./examples/geo_test/samplesheet.csv.

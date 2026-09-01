@@ -1,0 +1,7 @@
+sample_accession,sample_title,srr_accession,condition,replicate,organism,instrument
+GSM7053673,Act_ME18_Rep1,SRR23558740,ME18_knockdown,1,Drosophila melanogaster,Illumina HiSeq 2500
+GSM7053674,Act_ME18_Rep2,SRR23558739,ME18_knockdown,2,Drosophila melanogaster,Illumina HiSeq 2500
+GSM7053675,Act_ME18_Rep3,SRR23558738,ME18_knockdown,3,Drosophila melanogaster,Illumina HiSeq 2500
+GSM7053676,Act_CTRL_Rep2,SRR23558737,control,2,Drosophila melanogaster,Illumina HiSeq 2500
+GSM7053677,Act_CTRL_Rep3,SRR23558736,control,3,Drosophila melanogaster,Illumina HiSeq 2500
+GSM7053678,Act_CTRL_Rep4,SRR23558735,control,4,Drosophila melanogaster,Illumina HiSeq 2500

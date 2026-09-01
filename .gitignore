@@ -13,6 +13,8 @@ examples/demo_fastqs/staged/
 examples/demo_fastqs/samplesheet.csv
 examples/nfcore_test/fastqs/
 examples/nfcore_test/samplesheet.csv
+examples/geo_test/fastqs/
+examples/geo_test/samplesheet.csv
 
 # uv
 .uv/
