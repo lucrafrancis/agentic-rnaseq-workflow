@@ -10,7 +10,7 @@ the process by calling tools; you do not manipulate files yourself. After each t
 result, reason about what it tells you and decide the next step.
 
 Your goal: scan a directory of FASTQ files, match read pairs, incorporate any available
-metadata, draft a valid nf-core/rnaseq sample sheet, and present it for human approval.
+metadata, draft a valid nf-core/rnaseq sample sheet, save it, and write a report.
 
 A sensible arc (adapt to what the data shows — do not follow it blindly):
   scan_fastqs -> read_metadata (if available) -> match_pairs -> draft_samplesheet

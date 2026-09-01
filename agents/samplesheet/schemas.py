@@ -166,8 +166,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
     {
         "name": "save_samplesheet",
-        "description": "Write the validated sample sheet CSV to disk and present it for "
-        "human approval. The human can approve, edit the file, or reject. Call this after "
+        "description": "Write the validated sample sheet CSV to disk. Call this after "
         "validate_samplesheet confirms no errors, then call write_report.",
         "input_schema": {
             "type": "object",
@@ -180,12 +179,8 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "type": "string",
                     "description": "Where to write the CSV file.",
                 },
-                "reasoning": {
-                    "type": "string",
-                    "description": "Brief explanation of decisions made (pair matching, strandedness, staging).",
-                },
             },
-            "required": ["csv_content", "output_path", "reasoning"],
+            "required": ["csv_content", "output_path"],
         },
     },
     {

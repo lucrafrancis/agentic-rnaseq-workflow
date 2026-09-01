@@ -304,33 +304,10 @@ def write_report(report_markdown: str) -> Summary:
     return {"report_path": str(report_path), "report_chars": len(report_markdown)}
 
 
-def save_samplesheet(csv_content: str, output_path: str, reasoning: str) -> Summary:
-    """Write the sample sheet to disk and present it for human approval.
-
-    The agent calls this when the sheet is ready. The human sees a preview, the
-    reasoning, and summary stats, then approves, edits, or rejects.
-    """
-    from core.approval import present_for_approval
-
+def save_samplesheet(csv_content: str, output_path: str) -> Summary:
+    """Write the sample sheet CSV to disk."""
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(csv_content)
-
-    lines = csv_content.strip().split("\n")
-    n_samples = len(lines) - 1
-    preview = "\n".join(lines[:11])
-
-    result = present_for_approval(
-        title="Sample sheet",
-        preview=preview,
-        file_path=path,
-        summary_stats={"total_samples": n_samples, "reasoning": reasoning},
-    )
-
-    if result.approved:
-        if result.edited:
-            csv_content = path.read_text()
-        return {"approved": True, "edited": result.edited, "samplesheet_path": str(path)}
-    else:
-        path.unlink(missing_ok=True)
-        return {"approved": False, "reason": result.reason}
+    n_samples = len(csv_content.strip().split("\n")) - 1
+    return {"samplesheet_path": str(path), "n_samples": n_samples}

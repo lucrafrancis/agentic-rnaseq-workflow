@@ -2,6 +2,9 @@
 
 Reads a human-written prompt from a text file and hands it to the samplesheet agent.
 The prompt file is copied into the run directory as part of the audit trail.
+
+After the agent finishes, the human reviews the report and sample sheet before
+proceeding to nf-core submission (not yet wired up).
 """
 
 from __future__ import annotations
@@ -31,6 +34,13 @@ def main() -> None:
 
     from agents.samplesheet.loop import run_samplesheet_agent
     run_samplesheet_agent(prompt)
+
+    print(f"\n{'='*60}")
+    print("  Stage 1 complete")
+    print(f"{'='*60}")
+    print(f"  Run directory: {SESSION.paths.dir}")
+    print(f"  Report:        {SESSION.paths.dir / 'report.md'}")
+    print(f"\n  Review the report and sample sheet before proceeding.")
 
 
 if __name__ == "__main__":
