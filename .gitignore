@@ -8,6 +8,8 @@ __pycache__/
 
 # Data & run outputs (regenerated, not source)
 runs/
+examples/demo_fastqs/fastqs/
+examples/demo_fastqs/staged/
 
 # uv
 .uv/

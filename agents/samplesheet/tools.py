@@ -21,9 +21,43 @@ Summary = dict[str, Any]
 _FASTQ_EXTENSIONS = {".fastq", ".fq", ".fastq.gz", ".fq.gz"}
 
 _PAIR_PATTERN = re.compile(
-    r"^(?P<prefix>.+?)(?P<read>[_.]R?[12])(?P<suffix>\.fastq(?:\.gz)?|\.fq(?:\.gz)?)$",
+    r"^(?P<prefix>.+?)[_.]R?(?P<read>[12])(?P<tail>[_.].*?)?(?P<suffix>\.fastq(?:\.gz)?|\.fq(?:\.gz)?)$",
     re.IGNORECASE,
 )
+
+_ILLUMINA_SUFFIX = re.compile(r"_S\d+(?:_L\d+)?$")
+
+
+def list_directory(path: str) -> Summary:
+    """List the contents of a directory — files, subdirectories, and symlinks."""
+    dirpath = Path(path)
+    if not dirpath.is_dir():
+        return {"error": "not_a_directory", "message": f"'{path}' is not a directory."}
+
+    entries = []
+    for p in sorted(dirpath.iterdir()):
+        entries.append({"name": p.name, "type": "dir" if p.is_dir() else "file"})
+
+    return {"path": str(dirpath), "n_entries": len(entries), "entries": entries}
+
+
+def read_file(filepath: str, max_lines: int = 50) -> Summary:
+    """Read the first N lines of a text file."""
+    path = Path(filepath)
+    if not path.is_file():
+        return {"error": "not_a_file", "message": f"'{filepath}' does not exist."}
+
+    try:
+        lines = path.read_text().splitlines()[:max_lines]
+    except UnicodeDecodeError:
+        return {"error": "binary_file", "message": f"'{filepath}' is not a text file."}
+
+    return {
+        "filepath": str(path),
+        "n_lines": len(lines),
+        "truncated": len(path.read_text().splitlines()) > max_lines,
+        "content": "\n".join(lines),
+    }
 
 
 def scan_fastqs(directory: str) -> Summary:
@@ -93,11 +127,11 @@ def match_pairs(fastq_list: list[str]) -> Summary:
             continue
 
         prefix = m.group("prefix")
-        read_id = m.group("read")
-        read_num = "1" if "1" in read_id else "2"
+        sample = _ILLUMINA_SUFFIX.sub("", prefix)
+        read_num = m.group("read")
 
         if prefix not in pairs:
-            pairs[prefix] = {}
+            pairs[prefix] = {"sample": sample}
         key = f"fastq_{read_num}"
         if key in pairs[prefix]:
             unpaired.append(fq)
@@ -107,10 +141,11 @@ def match_pairs(fastq_list: list[str]) -> Summary:
     matched = []
     incomplete = []
     for prefix, reads in sorted(pairs.items()):
+        sample = reads.pop("sample")
         if "fastq_1" in reads and "fastq_2" in reads:
-            matched.append({"sample": prefix, **reads})
+            matched.append({"sample": sample, **reads})
         else:
-            incomplete.append({"sample": prefix, **reads})
+            incomplete.append({"sample": sample, **reads})
 
     return {
         "n_matched_pairs": len(matched),
@@ -204,4 +239,52 @@ def validate_samplesheet(sheet: str) -> Summary:
         "n_samples": len(samples_seen),
         "errors": errors,
         "warnings": warnings,
+    }
+
+
+def stage_fastqs(
+    pairs: list[dict], source_dir: str, staging_dir: str
+) -> Summary:
+    """Create a staging directory of symlinks with clean names.
+
+    Only needed when original filenames aren't suitable for the sample sheet (e.g.
+    Illumina names with index/lane segments). Creates symlinks pointing back to the
+    originals and writes a rename_manifest.json recording every mapping.
+    """
+    src = Path(source_dir)
+    stage = Path(staging_dir)
+    stage.mkdir(parents=True, exist_ok=True)
+
+    manifest = []
+    staged_pairs = []
+
+    for pair in pairs:
+        sample = pair["sample"]
+        entry = {"sample": sample}
+        for key in ("fastq_1", "fastq_2"):
+            if key not in pair:
+                continue
+            original = src / pair[key]
+            ext = "".join(Path(pair[key]).suffixes[-2:])  # .fastq.gz
+            read = "R1" if key == "fastq_1" else "R2"
+            clean_name = f"{sample}_{read}{ext}"
+            link = stage / clean_name
+            link.symlink_to(original.resolve())
+            manifest.append({
+                "original": str(original),
+                "staged": str(link),
+                "clean_name": clean_name,
+            })
+            entry[key] = str(link)
+        staged_pairs.append(entry)
+
+    manifest_path = stage / "rename_manifest.json"
+    import json
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+
+    return {
+        "n_links": len(manifest),
+        "staging_dir": str(stage),
+        "manifest_path": str(manifest_path),
+        "staged_pairs": staged_pairs,
     }

@@ -16,6 +16,31 @@ from agents.samplesheet import tools
 
 TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
+        "name": "list_directory",
+        "description": "List the contents of a directory — files and subdirectories. "
+        "Use to explore the data folder structure before scanning for FASTQs.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Directory path to list."},
+            },
+            "required": ["path"],
+        },
+    },
+    {
+        "name": "read_file",
+        "description": "Read the first N lines of a text file. Use to inspect READMEs, "
+        "config files, FASTQ headers, or anything that helps understand the data.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "filepath": {"type": "string", "description": "Path to the file."},
+                "max_lines": {"type": "integer", "description": "Lines to read (default 50)."},
+            },
+            "required": ["filepath"],
+        },
+    },
+    {
         "name": "scan_fastqs",
         "description": "Recursively scan a directory for FASTQ files. Returns a list of "
         "discovered filenames, the total count, and the directory scanned. Call this first "
@@ -106,12 +131,48 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "required": ["sheet"],
         },
     },
+    {
+        "name": "stage_fastqs",
+        "description": "Create symlinks with clean filenames in a staging directory. Only "
+        "needed when original names aren't suitable (e.g. Illumina index/lane segments). "
+        "Writes a rename_manifest.json recording every mapping. Returns staged pairs with "
+        "updated paths for the sample sheet.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "pairs": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "sample": {"type": "string"},
+                            "fastq_1": {"type": "string"},
+                            "fastq_2": {"type": "string"},
+                        },
+                    },
+                    "description": "Matched pairs from match_pairs.",
+                },
+                "source_dir": {
+                    "type": "string",
+                    "description": "Directory the original FASTQ paths are relative to.",
+                },
+                "staging_dir": {
+                    "type": "string",
+                    "description": "Directory to create symlinks in.",
+                },
+            },
+            "required": ["pairs", "source_dir", "staging_dir"],
+        },
+    },
 ]
 
 TOOL_FUNCTIONS: dict[str, Callable[..., dict[str, Any]]] = {
+    "list_directory": tools.list_directory,
+    "read_file": tools.read_file,
     "scan_fastqs": tools.scan_fastqs,
     "read_metadata": tools.read_metadata,
     "match_pairs": tools.match_pairs,
     "draft_samplesheet": tools.draft_samplesheet,
     "validate_samplesheet": tools.validate_samplesheet,
+    "stage_fastqs": tools.stage_fastqs,
 }
