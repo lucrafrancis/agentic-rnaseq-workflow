@@ -76,13 +76,19 @@ def submit_and_monitor(params: SubmissionParams) -> dict:
 
     log_path = paths.nextflow_log
     try:
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             params.to_nextflow_args(),
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
             cwd=str(paths.dir),
         )
-        log_path.write_text(proc.stdout + "\n" + proc.stderr)
+        with log_path.open("w") as log_file:
+            for line in proc.stdout:
+                print(line, end="")
+                log_file.write(line)
+                log_file.flush()
+        proc.wait()
 
         if proc.returncode == 0:
             SESSION.mark_stage_complete("submission")

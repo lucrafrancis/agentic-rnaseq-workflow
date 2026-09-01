@@ -74,7 +74,7 @@ def scan_fastqs(directory: str) -> Summary:
     fastqs = []
     for p in sorted(dirpath.rglob("*")):
         if p.is_file() and any(p.name.endswith(ext) for ext in _FASTQ_EXTENSIONS):
-            fastqs.append(str(p.relative_to(dirpath)))
+            fastqs.append(str(p.resolve()))
 
     return {
         "directory": str(dirpath),
@@ -305,8 +305,13 @@ def write_report(report_markdown: str) -> Summary:
 
 
 def save_samplesheet(csv_content: str, output_path: str) -> Summary:
-    """Write the sample sheet CSV to disk."""
-    path = Path(output_path)
+    """Write the sample sheet CSV to disk.
+
+    The LLM provides output_path, but we always write to the run directory's
+    canonical location so downstream stages can find it reliably.
+    """
+    from core.session import SESSION
+    path = SESSION.require_paths().samplesheet
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(csv_content)
     n_samples = len(csv_content.strip().split("\n")) - 1
