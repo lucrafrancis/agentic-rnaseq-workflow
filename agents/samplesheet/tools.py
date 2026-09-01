@@ -12,6 +12,7 @@ nf-core/rnaseq sample sheet, and validate the result.
 from __future__ import annotations
 
 import csv
+import json
 import re
 from pathlib import Path
 from typing import Any
@@ -279,7 +280,6 @@ def stage_fastqs(
         staged_pairs.append(entry)
 
     manifest_path = stage / "rename_manifest.json"
-    import json
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
 
     return {
@@ -288,3 +288,49 @@ def stage_fastqs(
         "manifest_path": str(manifest_path),
         "staged_pairs": staged_pairs,
     }
+
+
+def write_report(report_markdown: str) -> Summary:
+    """Write the agent's analysis report to the run directory.
+
+    The agent supplies the narrative: what it found, decisions it made, warnings,
+    and the final sample sheet summary. Called after save_samplesheet.
+    """
+    from core.session import SESSION
+
+    paths = SESSION.require_paths()
+    report_path = paths.dir / "report.md"
+    report_path.write_text(report_markdown.rstrip() + "\n")
+    return {"report_path": str(report_path), "report_chars": len(report_markdown)}
+
+
+def save_samplesheet(csv_content: str, output_path: str, reasoning: str) -> Summary:
+    """Write the sample sheet to disk and present it for human approval.
+
+    The agent calls this when the sheet is ready. The human sees a preview, the
+    reasoning, and summary stats, then approves, edits, or rejects.
+    """
+    from core.approval import present_for_approval
+
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(csv_content)
+
+    lines = csv_content.strip().split("\n")
+    n_samples = len(lines) - 1
+    preview = "\n".join(lines[:11])
+
+    result = present_for_approval(
+        title="Sample sheet",
+        preview=preview,
+        file_path=path,
+        summary_stats={"total_samples": n_samples, "reasoning": reasoning},
+    )
+
+    if result.approved:
+        if result.edited:
+            csv_content = path.read_text()
+        return {"approved": True, "edited": result.edited, "samplesheet_path": str(path)}
+    else:
+        path.unlink(missing_ok=True)
+        return {"approved": False, "reason": result.reason}

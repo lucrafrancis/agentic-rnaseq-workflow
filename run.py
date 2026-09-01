@@ -1,65 +1,36 @@
-"""Entrypoint: uv run python run.py <fastq_dir> [--metadata <path>]
+"""Entrypoint: uv run python run.py prompt.txt
 
-Orchestrates the three stages of the RNA-seq workflow:
-  1. Sample sheet generation (agent-driven)
-  2. nf-core/rnaseq submission
-  3. Post-pipeline analysis (stub)
+Reads a human-written prompt from a text file and hands it to the samplesheet agent.
+The prompt file is copied into the run directory as part of the audit trail.
 """
 
 from __future__ import annotations
 
-import argparse
+import shutil
 import sys
+from pathlib import Path
 
 from core.session import SESSION
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Agentic nf-core/rnaseq workflow",
-    )
-    parser.add_argument("fastq_dir", help="Directory containing FASTQ files")
-    parser.add_argument("--metadata", help="Path to metadata CSV/TSV file", default=None)
-    parser.add_argument("--name", help="Project name for the run directory", default="rnaseq")
-    args = parser.parse_args()
+    if len(sys.argv) != 2:
+        sys.exit("usage: python run.py <prompt.txt>")
 
-    SESSION.begin_run(args.name)
+    prompt_file = Path(sys.argv[1])
+    if not prompt_file.is_file():
+        sys.exit(f"File not found: {prompt_file}")
+
+    prompt = prompt_file.read_text().strip()
+    if not prompt:
+        sys.exit("Prompt file is empty.")
+
+    SESSION.begin_run("rnaseq")
+    shutil.copy2(prompt_file, SESSION.paths.dir / "prompt.txt")
     print(f"Run directory: {SESSION.paths.dir}")
 
-    # Stage 1: Sample sheet generation
-    print("\n--- Stage 1: Sample sheet generation ---")
     from agents.samplesheet.loop import run_samplesheet_agent
-
-    try:
-        result = run_samplesheet_agent(args.fastq_dir, args.metadata)
-    except NotImplementedError:
-        print("Sample sheet agent loop not yet implemented.")
-        print("Run the tools manually or implement agents/samplesheet/loop.py.")
-        return
-
-    if "error" in result:
-        sys.exit(f"Sample sheet generation failed: {result['error']}")
-
-    samplesheet_path = result["samplesheet_path"]
-    SESSION.mark_stage_complete("samplesheet")
-    print(f"Sample sheet: {samplesheet_path}")
-
-    # Stage 2: nf-core/rnaseq submission
-    print("\n--- Stage 2: nf-core/rnaseq submission ---")
-    from agents.submission.submit import build_submission, submit_and_monitor
-
-    params = build_submission(samplesheet_path)
-    outcome = submit_and_monitor(params)
-
-    if not outcome.get("success"):
-        print(f"Submission outcome: {outcome}")
-        return
-
-    # Stage 3: Post-pipeline analysis (stub)
-    print("\n--- Stage 3: Post-pipeline analysis ---")
-    print("Not yet implemented.")
-
-    print(f"\nDone. Run directory: {SESSION.paths.dir}")
+    run_samplesheet_agent(prompt)
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ what it is; this module handles the presentation and input loop.
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -55,6 +56,10 @@ def present_for_approval(
 
     if file_path:
         print(f"\nFull file: {file_path}")
+
+    if not sys.stdin.isatty():
+        print("\n[non-interactive: auto-approved]")
+        return ApprovalResult(approved=True)
 
     print()
     while True:

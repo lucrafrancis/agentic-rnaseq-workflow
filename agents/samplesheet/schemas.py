@@ -164,6 +164,45 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "required": ["pairs", "source_dir", "staging_dir"],
         },
     },
+    {
+        "name": "save_samplesheet",
+        "description": "Write the validated sample sheet CSV to disk and present it for "
+        "human approval. The human can approve, edit the file, or reject. Call this after "
+        "validate_samplesheet confirms no errors, then call write_report.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "csv_content": {
+                    "type": "string",
+                    "description": "The validated sample sheet CSV content.",
+                },
+                "output_path": {
+                    "type": "string",
+                    "description": "Where to write the CSV file.",
+                },
+                "reasoning": {
+                    "type": "string",
+                    "description": "Brief explanation of decisions made (pair matching, strandedness, staging).",
+                },
+            },
+            "required": ["csv_content", "output_path", "reasoning"],
+        },
+    },
+    {
+        "name": "write_report",
+        "description": "Write a Markdown report summarising what was found, decisions made, "
+        "and the final sample sheet. Call this last, after save_samplesheet.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "report_markdown": {
+                    "type": "string",
+                    "description": "The full report as Markdown.",
+                },
+            },
+            "required": ["report_markdown"],
+        },
+    },
 ]
 
 TOOL_FUNCTIONS: dict[str, Callable[..., dict[str, Any]]] = {
@@ -175,4 +214,6 @@ TOOL_FUNCTIONS: dict[str, Callable[..., dict[str, Any]]] = {
     "draft_samplesheet": tools.draft_samplesheet,
     "validate_samplesheet": tools.validate_samplesheet,
     "stage_fastqs": tools.stage_fastqs,
+    "save_samplesheet": tools.save_samplesheet,
+    "write_report": tools.write_report,
 }
