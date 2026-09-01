@@ -18,3 +18,8 @@ examples/geo_test/samplesheet.csv
 
 # uv
 .uv/
+
+# Nextflow
+.nextflow/
+.nextflow.log*
+work/

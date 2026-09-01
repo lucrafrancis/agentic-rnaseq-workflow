@@ -20,7 +20,7 @@ RUNS_DIR = ROOT / "runs"
 
 # --- nf-core/rnaseq defaults ------------------------------------------------
 NFCORE_PIPELINE = "nf-core/rnaseq"
-NFCORE_REVISION = "3.14.0"
+NFCORE_REVISION = "3.26.0"
 
 
 @dataclass(frozen=True)
