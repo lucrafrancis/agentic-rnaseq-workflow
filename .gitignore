@@ -1,0 +1,13 @@
+# Environments
+.venv/
+__pycache__/
+*.pyc
+
+# Secrets
+.env
+
+# Data & run outputs (regenerated, not source)
+runs/
+
+# uv
+.uv/
