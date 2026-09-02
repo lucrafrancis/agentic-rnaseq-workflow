@@ -172,10 +172,17 @@ def draft_samplesheet(matches: list[dict], metadata: dict | None = None) -> Summ
         if metadata and sample in metadata:
             strandedness = metadata[sample].get("strandedness", "auto")
 
+        fastq_1 = match.get("fastq_1", "")
+        fastq_2 = match.get("fastq_2", "")
+        if fastq_1:
+            fastq_1 = str(Path(fastq_1).resolve())
+        if fastq_2:
+            fastq_2 = str(Path(fastq_2).resolve())
+
         rows.append({
             "sample": sample,
-            "fastq_1": match.get("fastq_1", ""),
-            "fastq_2": match.get("fastq_2", ""),
+            "fastq_1": fastq_1,
+            "fastq_2": fastq_2,
             "strandedness": strandedness,
         })
 

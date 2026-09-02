@@ -1,0 +1,7 @@
+srr,sample,condition,timepoint,strandedness
+SRR12626034,Mock_72hpi_rep1,mock,72hpi,auto
+SRR12626035,Mock_72hpi_rep2,mock,72hpi,auto
+SRR12626036,Mock_72hpi_rep3,mock,72hpi,auto
+SRR12626040,SARS_72hpi_rep1,SARS-CoV-2,72hpi,auto
+SRR12626041,SARS_72hpi_rep2,SARS-CoV-2,72hpi,auto
+SRR12626042,SARS_72hpi_rep3,SARS-CoV-2,72hpi,auto
