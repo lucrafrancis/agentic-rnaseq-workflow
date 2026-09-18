@@ -1,7 +1,6 @@
-"""Entrypoint: uv run python run.py prompt.txt
-
-Reads a human-written prompt from a text file and hands it to the samplesheet agent.
-The prompt file is copied into the run directory as part of the audit trail.
+"""Entrypoint:
+  uv run python run.py <prompt.txt>         — full pipeline (stages 1-3)
+  uv run python run.py --analyze <results>  — analysis only (stage 3)
 
 Three stages with human approval between them:
   1. Samplesheet agent — scans FASTQs, builds sample sheet
@@ -21,8 +20,17 @@ from core.session import SESSION
 
 
 def main() -> None:
+    if len(sys.argv) == 3 and sys.argv[1] == "--analyze":
+        results_dir = Path(sys.argv[2])
+        if not results_dir.is_dir():
+            sys.exit(f"Not a directory: {results_dir}")
+        SESSION.begin_run("analysis")
+        print(f"Run directory: {SESSION.paths.dir}")
+        _run_analysis(str(results_dir))
+        return
+
     if len(sys.argv) != 2:
-        sys.exit("usage: python run.py <prompt.txt>")
+        sys.exit("usage: python run.py <prompt.txt>\n       python run.py --analyze <results_dir>")
 
     prompt_file = Path(sys.argv[1])
     if not prompt_file.is_file():
