@@ -14,6 +14,9 @@ MODEL = "claude-haiku-4-5-20251001"
 MAX_TOKENS = 16384
 MAX_TURNS = 40
 
+# --- Reproducibility ---------------------------------------------------------
+SEED = 0
+
 # --- Paths -------------------------------------------------------------------
 ROOT = Path(__file__).resolve().parent.parent
 RUNS_DIR = ROOT / "runs"
@@ -52,3 +55,27 @@ class RunPaths:
     @property
     def params_file(self) -> Path:
         return self.dir / "params.json"
+
+    @property
+    def design(self) -> Path:
+        return self.dir / "design.csv"
+
+    @property
+    def analysis_dir(self) -> Path:
+        return self.dir / "analysis"
+
+    @property
+    def analysis_figures(self) -> Path:
+        return self.analysis_dir / "figures"
+
+    @property
+    def analysis_report(self) -> Path:
+        return self.analysis_dir / "report.md"
+
+    @property
+    def de_results(self) -> Path:
+        return self.analysis_dir / "de_results.csv"
+
+    @property
+    def analysis_tool_log(self) -> Path:
+        return self.analysis_dir / "tool_calls.jsonl"

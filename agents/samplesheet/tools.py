@@ -311,6 +311,39 @@ def write_report(report_markdown: str) -> Summary:
     return {"report_path": str(report_path), "report_chars": len(report_markdown)}
 
 
+def save_design(rows: list[dict]) -> Summary:
+    """Write a design CSV (sample -> condition + optional covariates) to the run directory.
+
+    Each row must have at least 'sample' and 'condition' keys. Additional columns
+    are preserved. The downstream analysis agent reads this to know the experimental
+    structure without the user re-specifying it.
+    """
+    from core.session import SESSION
+
+    if not rows:
+        return {"error": "empty_design", "message": "Design must have at least one row."}
+    for i, row in enumerate(rows):
+        if "sample" not in row:
+            return {"error": "missing_sample", "message": f"Row {i}: missing 'sample' key."}
+        if "condition" not in row:
+            return {"error": "missing_condition", "message": f"Row {i}: missing 'condition' key."}
+
+    paths = SESSION.require_paths()
+    columns = list(rows[0].keys())
+    lines = [",".join(columns)]
+    for row in rows:
+        lines.append(",".join(str(row.get(c, "")) for c in columns))
+    paths.design.write_text("\n".join(lines) + "\n")
+
+    conditions = sorted(set(row["condition"] for row in rows))
+    return {
+        "design_path": str(paths.design),
+        "n_samples": len(rows),
+        "conditions": conditions,
+        "columns": columns,
+    }
+
+
 def save_samplesheet(csv_content: str, output_path: str) -> Summary:
     """Write the sample sheet CSV to disk.
 

@@ -3,13 +3,15 @@
 Reads a human-written prompt from a text file and hands it to the samplesheet agent.
 The prompt file is copied into the run directory as part of the audit trail.
 
-After the samplesheet agent finishes, the human reviews the sample sheet and approves,
-edits, or rejects it. On approval, the pipeline submission is built and presented for
-a second approval before launching nextflow.
+Three stages with human approval between them:
+  1. Samplesheet agent — scans FASTQs, builds sample sheet
+  2. Submission handler — builds nextflow command, submits pipeline
+  3. Analysis agent — downstream DE, enrichment, and reporting
 """
 
 from __future__ import annotations
 
+import base64
 import shutil
 import sys
 from pathlib import Path
@@ -83,6 +85,65 @@ def main() -> None:
         if outcome.get("diagnosis"):
             print(f"  Diagnosis:\n{outcome['diagnosis']}")
         sys.exit(1)
+
+    # --- Stage 3: downstream analysis ---
+    _run_analysis(outcome["outdir"])
+
+
+def _run_analysis(results_dir: str) -> None:
+    """Prompt for analysis instructions and run the analysis agent."""
+    paths = SESSION.require_paths()
+
+    print("\n" + "=" * 60)
+    print("  Pipeline completed. Ready for downstream analysis.")
+    print("=" * 60)
+
+    try:
+        analysis_input = input("\nAnalysis prompt (or 'skip'): ").strip()
+    except EOFError:
+        print("\nNo terminal input. Skipping analysis.")
+        return
+
+    if not analysis_input or analysis_input.lower() == "skip":
+        print("Analysis skipped.")
+        return
+
+    # Optional paper PDF
+    pdf_path = None
+    try:
+        pdf_input = input("Paper PDF path (optional, Enter to skip): ").strip()
+        if pdf_input:
+            pdf_path = Path(pdf_input)
+            if not pdf_path.is_file():
+                print(f"PDF not found: {pdf_path}. Continuing without it.")
+                pdf_path = None
+    except EOFError:
+        pass
+
+    # Build the user message
+    context_parts = [analysis_input, f"\nThe nf-core/rnaseq results are at: {results_dir}"]
+    if paths.design.is_file():
+        context_parts.append(f"A design CSV is available at: {paths.design}")
+
+    if pdf_path:
+        pdf_b64 = base64.standard_b64encode(pdf_path.read_bytes()).decode("ascii")
+        user_message = [
+            {
+                "type": "document",
+                "source": {"type": "base64", "media_type": "application/pdf", "data": pdf_b64},
+            },
+            {"type": "text", "text": "\n".join(context_parts)},
+        ]
+    else:
+        user_message = "\n".join(context_parts)
+
+    from agents.analysis.loop import run_analysis_agent
+    run_analysis_agent(user_message)
+    SESSION.mark_stage_complete("analysis")
+
+    if paths.analysis_report.is_file():
+        print(f"\nAnalysis report: {paths.analysis_report}")
+    print("Done.")
 
 
 if __name__ == "__main__":

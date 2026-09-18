@@ -1,5 +1,6 @@
-"""Post-pipeline analysis agent — stub.
+"""Post-pipeline analysis agent: differential expression, enrichment, and reporting.
 
-This stage will eventually run downstream analysis on the nf-core/rnaseq outputs
-(differential expression, pathway enrichment, etc.). Not yet implemented.
+Takes nf-core/rnaseq outputs (count matrices, QC data) and runs downstream analysis:
+QC checks, differential expression via PyDESeq2, gene set enrichment via gseapy,
+and generates a Markdown report with figures.
 """

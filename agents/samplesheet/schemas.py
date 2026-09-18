@@ -184,6 +184,30 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "save_design",
+        "description": "Write a design CSV mapping samples to experimental conditions. "
+        "Each row needs at least 'sample' and 'condition'. Call after save_samplesheet "
+        "if you can infer the experimental design from sample names or metadata.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "rows": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "sample": {"type": "string"},
+                            "condition": {"type": "string"},
+                        },
+                        "required": ["sample", "condition"],
+                    },
+                    "description": "List of sample-to-condition mappings.",
+                },
+            },
+            "required": ["rows"],
+        },
+    },
+    {
         "name": "write_report",
         "description": "Write a Markdown report summarising what was found, decisions made, "
         "and the final sample sheet. Call this last, after save_samplesheet.",
@@ -210,5 +234,6 @@ TOOL_FUNCTIONS: dict[str, Callable[..., dict[str, Any]]] = {
     "validate_samplesheet": tools.validate_samplesheet,
     "stage_fastqs": tools.stage_fastqs,
     "save_samplesheet": tools.save_samplesheet,
+    "save_design": tools.save_design,
     "write_report": tools.write_report,
 }

@@ -8,9 +8,9 @@ Three stages, with human approval **between** stages (not inside the agent loop)
 
 1. **Samplesheet agent** (`agents/samplesheet/`) — scans FASTQs, reads metadata, matches pairs, drafts/validates/saves a sample sheet, writes a report. Fully implemented and tested with real GEO data.
 2. **Submission handler** (`agents/submission/`) — builds nextflow command, presents for human approval, submits and streams live output. Wired into `run.py`, tested end-to-end.
-3. **Analysis agent** (`agents/analysis/`) — stub only. Next to implement.
+3. **Analysis agent** (`agents/analysis/`) — downstream DE, enrichment, QC, and reporting on nf-core/rnaseq outputs. Python-only (PyDESeq2, gseapy, numpy PCA). Optionally accepts a paper PDF as context via Claude's native base64 content blocks. Fully implemented and tested.
 
-The full flow in `run.py`: samplesheet agent → human approves sample sheet → submission builds nextflow command → human approves submission → nextflow runs with live streaming output.
+The full flow in `run.py`: samplesheet agent → human approves sample sheet → submission builds nextflow command → human approves submission → nextflow runs → analysis agent runs downstream analysis.
 
 ## Running
 
@@ -39,9 +39,16 @@ The prompt file describes the data (FASTQ location, organism, metadata path, str
 
 `core/config.py` — model name, max tokens/turns, pipeline version, paths. Single source of truth. Currently using Haiku 4.5 for cheaper test runs.
 
+## Analysis agent tools
+
+`scan_results` → `load_counts` → `set_design` (if needed) → `compute_qc` → `filter_low_counts` → `run_deseq2` → `get_top_genes` → `run_enrichment` → `summarize_findings` → `generate_report`
+
+- `save_design` (samplesheet agent) writes `design.csv` for traceability; `set_design` (analysis agent) is the fallback when none exists
+- Enrichment uses gseapy/Enrichr (network call) — mocked in tests
+- PCA via numpy SVD on log2(counts+1), no scanpy dependency
+
 ## Future direction
 
-- **Analysis agent** — next to build. Downstream analysis on nf-core/rnaseq outputs (DE, pathway enrichment, QC summary).
 - **Streamlit UI** — wrap the CLI in a web app for non-coders. Local mode (user has nextflow/Docker), with cloud submission as a later addition.
 - **Multi-provider LLM support** — abstract the agent loop to support OpenAI alongside Anthropic. Thin adapter layer over the current `loop.py` pattern.
 
