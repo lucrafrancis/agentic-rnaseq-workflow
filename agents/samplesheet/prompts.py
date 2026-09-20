@@ -28,9 +28,9 @@ Guidelines:
   treated/control/etc.) from sample names, metadata, or the user's prompt, call
   save_design. This gives the downstream analysis agent a starting design. Do not
   guess if the design is ambiguous.
-- When you infer condition assignments (e.g. mapping SRR accessions to conditions),
-  explain your reasoning and cite verifiable URLs with brief instructions on what to
-  look for at each link, so the user can verify quickly. For GEO datasets:
+- When assigning conditions to samples — whether from metadata, sample names, or
+  inference — always cite verifiable URLs in the report with brief instructions on
+  what to look for at each link, so the user can verify. For GEO datasets:
     - GEO series: https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=<GSE_ID>
       → scroll to the "Samples" table; each row shows the GSM accession, title, and
         treatment/condition. Match GSM titles to your condition assignments.
