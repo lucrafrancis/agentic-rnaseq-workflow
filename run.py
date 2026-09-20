@@ -75,28 +75,91 @@ def main() -> None:
         preview = samplesheet.read_text()
         print(f"Using edited sample sheet ({preview.count(chr(10)) - 1} samples).")
 
-    # --- Stage 2: pipeline submission ---
-    from agents.submission.submit import build_submission, submit_and_monitor
-
-    params = build_submission(samplesheet_path=str(samplesheet))
-    outcome = submit_and_monitor(params)
-
-    if not outcome.get("submitted"):
-        print(f"\nSubmission skipped: {outcome.get('reason') or outcome.get('message')}")
-        sys.exit(1)
-
-    if outcome.get("success"):
-        print(f"\nPipeline finished successfully.")
-        print(f"  Results: {outcome['outdir']}")
-    else:
-        print(f"\nPipeline failed (exit code {outcome.get('returncode')}).")
-        print(f"  Log: {outcome.get('log_path')}")
-        if outcome.get("diagnosis"):
-            print(f"  Diagnosis:\n{outcome['diagnosis']}")
-        sys.exit(1)
+    # --- Stage 2: pipeline submission (with troubleshooting retry loop) ---
+    outcome = _submit_with_troubleshooting(str(samplesheet))
 
     # --- Stage 3: downstream analysis ---
     _run_analysis(outcome["outdir"])
+
+
+def _submit_with_troubleshooting(samplesheet_path: str) -> dict:
+    """Run Stage 2 with LLM-assisted troubleshooting on failure."""
+    from agents.submission.errors import diagnose_log
+    from agents.submission.submit import build_submission, submit_and_monitor
+    from agents.submission.troubleshoot import (
+        MAX_RETRIES,
+        apply_parameter_fix,
+        diagnose_and_propose,
+        present_proposal,
+        wait_for_user_action,
+    )
+
+    params = build_submission(samplesheet_path=samplesheet_path)
+    history: list[dict] = []
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        outcome = submit_and_monitor(params)
+
+        if not outcome.get("submitted"):
+            print(f"\nSubmission skipped: {outcome.get('reason') or outcome.get('message')}")
+            sys.exit(1)
+
+        if outcome.get("success"):
+            print(f"\nPipeline finished successfully.")
+            print(f"  Results: {outcome['outdir']}")
+            return outcome
+
+        print(f"\nPipeline failed (exit code {outcome.get('returncode')}).")
+        print(f"  Log: {outcome.get('log_path')}")
+
+        if attempt == MAX_RETRIES:
+            print(f"\nExhausted {MAX_RETRIES} attempts. Manual intervention needed.")
+            if history:
+                print("\nTroubleshooting history:")
+                for h in history:
+                    print(f"  Attempt {h['attempt']}: {h['root_cause']} → {h['fix_description']}")
+            sys.exit(1)
+
+        diagnoses = diagnose_log(outcome.get("log_path", ""))
+        proposal = diagnose_and_propose(outcome, params, diagnoses, attempt, history)
+
+        decision = present_proposal(proposal, attempt)
+        if decision == "abort":
+            print("Pipeline aborted by user.")
+            sys.exit(1)
+        if decision == "skip":
+            print("Troubleshooting skipped.")
+            sys.exit(1)
+
+        category = proposal.get("category", "unfixable")
+        if category == "unfixable":
+            print("Issue is beyond automated troubleshooting. Manual intervention needed.")
+            sys.exit(1)
+
+        if category == "parameter_change" and proposal.get("parameter_changes"):
+            apply_parameter_fix(params, proposal["parameter_changes"])
+            print("Parameters updated. Retrying...")
+        elif category == "user_action":
+            if not wait_for_user_action(proposal):
+                print("Pipeline aborted by user.")
+                sys.exit(1)
+            print("Retrying...")
+        elif category == "config_change":
+            print(f"Config change suggested: {proposal.get('fix_description')}")
+            if not wait_for_user_action(proposal):
+                print("Pipeline aborted by user.")
+                sys.exit(1)
+            print("Retrying...")
+
+        history.append({
+            "attempt": attempt,
+            "root_cause": proposal.get("root_cause", "unknown"),
+            "fix_description": proposal.get("fix_description", "none"),
+            "category": category,
+            "outcome": "retrying",
+        })
+
+    sys.exit(1)
 
 
 def _run_analysis(results_dir: str) -> None:

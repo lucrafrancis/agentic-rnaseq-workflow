@@ -57,6 +57,10 @@ class RunPaths:
         return self.dir / "params.json"
 
     @property
+    def troubleshooting_log(self) -> Path:
+        return self.dir / "troubleshooting.jsonl"
+
+    @property
     def design(self) -> Path:
         return self.dir / "design.csv"
 
