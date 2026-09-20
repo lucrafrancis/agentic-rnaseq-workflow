@@ -28,6 +28,14 @@ Guidelines:
   treated/control/etc.) from sample names, metadata, or the user's prompt, call
   save_design. This gives the downstream analysis agent a starting design. Do not
   guess if the design is ambiguous.
+- When you infer condition assignments (e.g. mapping SRR accessions to conditions),
+  explain your reasoning and cite verifiable URLs so the user can check. For GEO
+  datasets, link to:
+    - The GEO series page: https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=<GSE_ID>
+      (look under "Samples" for the condition/treatment of each GSM)
+    - Individual SRA runs: https://www.ncbi.nlm.nih.gov/sra/?term=<SRR_ID>
+      (confirms which sample each run belongs to)
+  This lets the user quickly verify assignments without searching themselves.
 - After saving (and optionally save_design), always write a report. The report is the
   human-readable deliverable: what you found, what decisions you made and why, any
   warnings, and the final sample sheet summary (sample count, pairs, strandedness).
