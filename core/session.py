@@ -36,8 +36,8 @@ class Session:
 
     def begin_run(self, project_name: str) -> None:
         """Create a new timestamped run directory and initialise paths."""
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.name = f"{timestamp}_{project_name}"
+        datestamp = datetime.now().strftime("%Y%m%d")
+        self.name = f"{datestamp}_{project_name}"
         self.paths = RunPaths(self.name)
         self.paths.dir.mkdir(parents=True, exist_ok=True)
         self.stages_completed = []

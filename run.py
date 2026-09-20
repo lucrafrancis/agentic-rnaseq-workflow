@@ -40,7 +40,8 @@ def main() -> None:
     if not prompt:
         sys.exit("Prompt file is empty.")
 
-    SESSION.begin_run("rnaseq")
+    project_name = prompt_file.stem.replace(" ", "_")
+    SESSION.begin_run(project_name)
     shutil.copy2(prompt_file, SESSION.paths.dir / "prompt.txt")
     print(f"Run directory: {SESSION.paths.dir}")
 
