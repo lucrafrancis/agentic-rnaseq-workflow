@@ -4,13 +4,14 @@ Raw Anthropic API agent loop (no frameworks) that builds nf-core/rnaseq sample s
 
 ## Architecture
 
-Three stages, with human approval **between** stages (not inside the agent loop):
+Four stages, with human approval **between** stages (not inside the agent loop):
 
+0. **Download agent** (`agents/download/`) — resolves GEO/SRA accessions via NCBI/ENA APIs, generates a download script (aspera > aria2c > curl), validates MD5 checksums. Only runs when the prompt contains an accession but no FASTQ path.
 1. **Samplesheet agent** (`agents/samplesheet/`) — scans FASTQs, reads metadata, matches pairs, drafts/validates/saves a sample sheet, writes a report. Fully implemented and tested with real GEO data.
-2. **Submission handler** (`agents/submission/`) — builds nextflow command, presents for human approval, submits and streams live output. Wired into `run.py`, tested end-to-end.
+2. **Submission agent** (`agents/submission/`) — reads the prompt and configures nextflow params (genome, skip_alignment, max_memory, etc.) via an open-ended tool. Writes `run_nextflow.sh` + `nf_params.yml` (YAML preserves boolean types for nf-schema). Human approves the script before execution.
 3. **Analysis agent** (`agents/analysis/`) — downstream DE, enrichment, QC, and reporting on nf-core/rnaseq outputs. Python-only (PyDESeq2, gseapy, numpy PCA). Optionally accepts a paper PDF as context via Claude's native base64 content blocks. Fully implemented and tested.
 
-The full flow in `run.py`: samplesheet agent → human approves sample sheet → submission builds nextflow command → human approves submission → nextflow runs (with troubleshooting on failure) → post-run warning review → analysis agent runs downstream analysis.
+The full flow in `run.py`: download agent (if needed) → human approves download script → samplesheet agent → human approves sample sheet → submission agent configures params → human approves `run_nextflow.sh` → nextflow runs (with troubleshooting on failure) → post-run warning review → analysis agent runs downstream analysis.
 
 ## Running
 
@@ -38,7 +39,7 @@ The prompt file describes the data (FASTQ location, organism, metadata path, str
 
 ## Config
 
-`core/config.py` — model name, max tokens/turns, pipeline version, paths. Single source of truth. `MODEL` (Haiku 4.5) for agent loops, `MODEL_STRONG` (Sonnet) for troubleshooting and warning review.
+`core/config.py` — model name, max tokens/turns, pipeline version, paths. Single source of truth. `MODEL` (Haiku 4.5) for agent loops, `MODEL_SONNET` for troubleshooting and warning review.
 
 ## Analysis agent tools
 
@@ -50,7 +51,7 @@ The prompt file describes the data (FASTQ location, organism, metadata path, str
 
 ## Troubleshooting and warnings
 
-- On pipeline failure: LLM (Sonnet) diagnoses the error from the nextflow log, proposes a fix, user approves, retries. Max 3 attempts. All logged to `troubleshooting.jsonl`.
+- On pipeline failure: conversational troubleshooting — LLM (Sonnet) reads the full log, explains the issue, proposes a fix via `propose_fix` tool. User can chat, ask questions, or redirect before approving. Max 3 attempts. All logged to `troubleshooting.jsonl`.
 - On success: LLM scans log for WARN lines and produces a concise summary of anything affecting downstream analysis.
 - Samplesheet agent cites GEO/SRA URLs when assigning conditions, with instructions on where to verify.
 

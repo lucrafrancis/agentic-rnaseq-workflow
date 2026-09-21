@@ -8,6 +8,7 @@ or output directory).
 from __future__ import annotations
 
 import json
+import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -47,6 +48,39 @@ class SubmissionParams:
 
     def to_command_string(self) -> str:
         return " ".join(self.to_nextflow_args())
+
+    def to_script(self, params_file: str) -> str:
+        """Generate a bash script that references a params YAML file."""
+        return "\n".join([
+            "#!/usr/bin/env bash",
+            "set -euo pipefail",
+            "",
+            f"nextflow run {self.pipeline} \\",
+            f"  -r {self.revision} \\",
+            f"  --input {shlex.quote(self.input_samplesheet)} \\",
+            f"  --outdir {shlex.quote(self.outdir)} \\",
+            f"  -profile {self.profile} \\",
+            f"  -params-file {shlex.quote(params_file)}",
+            "",
+        ])
+
+    def write_nf_params(self, path: Path) -> None:
+        """Write pipeline params (genome + extras) to a YAML file.
+
+        YAML preserves types — booleans stay booleans, so nf-schema
+        won't reject them as strings.
+        """
+        params: dict[str, Any] = {"genome": self.genome}
+        params.update(self.extra_args)
+        lines = []
+        for key, value in params.items():
+            if isinstance(value, bool):
+                lines.append(f"{key}: {str(value).lower()}")
+            elif isinstance(value, (int, float)):
+                lines.append(f"{key}: {value}")
+            else:
+                lines.append(f"{key}: \"{value}\"")
+        path.write_text("\n".join(lines) + "\n")
 
     def to_dict(self) -> dict[str, Any]:
         return {

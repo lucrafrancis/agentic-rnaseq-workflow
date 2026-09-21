@@ -170,7 +170,7 @@ def diagnose_and_propose(
 
     while True:
         response = client.messages.create(
-            model=config.MODEL_STRONG,
+            model=config.MODEL_SONNET,
             max_tokens=2048,
             system=_SYSTEM_PROMPT,
             tools=[_PROPOSE_FIX_TOOL],
@@ -269,7 +269,7 @@ def review_warnings(log_path: str) -> str | None:
 
     client = anthropic.Anthropic()
     response = client.messages.create(
-        model=config.MODEL_STRONG,
+        model=config.MODEL_SONNET,
         max_tokens=1024,
         system=_WARNING_REVIEW_PROMPT,
         messages=[{"role": "user", "content": f"Nextflow log warnings:\n\n" + "\n".join(warn_lines)}],

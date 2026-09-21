@@ -60,17 +60,22 @@ def build_submission(
 
 
 def submit_and_monitor(params: SubmissionParams) -> dict:
-    """Present the nextflow command for approval, then submit and monitor.
+    """Write a run script, present for approval, then execute and monitor.
 
     Returns a summary dict with the outcome: success/failure, log path, and any
     diagnosed errors.
     """
     paths = SESSION.require_paths()
-    command = params.to_command_string()
+    params.write_nf_params(paths.nf_params)
+    script_path = paths.nextflow_script
+    script_path.write_text(params.to_script(str(paths.nf_params)))
+    script_path.chmod(0o755)
 
+    preview = script_path.read_text() + f"\n# {paths.nf_params}:\n" + paths.nf_params.read_text()
     result = present_for_approval(
         title="nf-core/rnaseq submission",
-        preview=command,
+        preview=preview,
+        file_path=script_path,
         summary_stats=params.to_dict(),
     )
     if not result.approved:
@@ -79,7 +84,7 @@ def submit_and_monitor(params: SubmissionParams) -> dict:
     log_path = paths.nextflow_log
     try:
         proc = subprocess.Popen(
-            params.to_nextflow_args(),
+            ["bash", str(script_path)],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,

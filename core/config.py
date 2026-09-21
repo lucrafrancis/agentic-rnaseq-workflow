@@ -11,7 +11,7 @@ from pathlib import Path
 
 # --- LLM ---------------------------------------------------------------------
 MODEL = "claude-haiku-4-5-20251001"
-MODEL_STRONG = "claude-sonnet-4-5-20250929"
+MODEL_SONNET = "claude-sonnet-4-5-20250929"
 MAX_TOKENS = 16384
 MAX_TURNS = 40
 
@@ -56,6 +56,14 @@ class RunPaths:
     @property
     def params_file(self) -> Path:
         return self.dir / "params.json"
+
+    @property
+    def nextflow_script(self) -> Path:
+        return self.dir / "run_nextflow.sh"
+
+    @property
+    def nf_params(self) -> Path:
+        return self.dir / "nf_params.yml"
 
     @property
     def troubleshooting_log(self) -> Path:
