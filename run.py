@@ -130,7 +130,12 @@ def _submit_with_troubleshooting(samplesheet_path: str) -> dict:
             sys.exit(1)
 
         diagnoses = diagnose_log(outcome.get("log_path", ""))
-        proposal = diagnose_and_propose(outcome, params, diagnoses, attempt, history)
+        print("Analysing failure...")
+        try:
+            proposal = diagnose_and_propose(outcome, params, diagnoses, attempt, history)
+        except Exception as exc:
+            print(f"Troubleshooting failed: {exc}")
+            sys.exit(1)
 
         decision = present_proposal(proposal, attempt)
         if decision == "abort":

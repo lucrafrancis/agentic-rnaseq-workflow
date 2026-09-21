@@ -89,6 +89,7 @@ def submit_and_monitor(params: SubmissionParams) -> dict:
                 log_file.write(line)
                 log_file.flush()
         proc.wait()
+        print(f"\nNextflow exited (code {proc.returncode}).")
 
         if proc.returncode == 0:
             SESSION.mark_stage_complete("submission")
