@@ -75,6 +75,31 @@ def _get_log_tail(log_path: str, n_lines: int = 200) -> str:
     return "\n".join(lines[-n_lines:])
 
 
+def _parse_json_response(raw: str) -> dict:
+    """Extract JSON from an LLM response, handling markdown fences."""
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+    # Strip markdown code fences
+    import re
+    match = re.search(r"```(?:json)?\s*\n(.*?)\n```", raw, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group(1))
+        except json.JSONDecodeError:
+            pass
+    # Try finding first { to last }
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start != -1 and end != -1:
+        try:
+            return json.loads(raw[start : end + 1])
+        except json.JSONDecodeError:
+            pass
+    return {"category": "unfixable", "root_cause": "Could not parse LLM response", "raw_response": raw}
+
+
 def diagnose_and_propose(
     outcome: dict,
     params: SubmissionParams,
@@ -113,10 +138,7 @@ def diagnose_and_propose(
     )
 
     raw = response.content[0].text.strip()
-    try:
-        proposal = json.loads(raw)
-    except json.JSONDecodeError:
-        proposal = {"category": "unfixable", "root_cause": "LLM response was not valid JSON", "raw_response": raw}
+    proposal = _parse_json_response(raw)
 
     _log_event({"event": "diagnosis", "attempt": attempt, "proposal": proposal})
     return proposal
