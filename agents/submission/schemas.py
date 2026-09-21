@@ -11,6 +11,24 @@ from agents.submission import tools
 
 TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
+        "name": "run_command",
+        "description": (
+            "Run a shell command on the machine and return stdout/stderr. "
+            "Use this to check system resources (RAM, CPUs, disk), inspect files, "
+            "or verify the environment before configuring the pipeline."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string",
+                    "description": "The shell command to run.",
+                },
+            },
+            "required": ["command"],
+        },
+    },
+    {
         "name": "configure_submission",
         "description": (
             "Configure nextflow submission parameters for nf-core/rnaseq. "
@@ -63,5 +81,6 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
 ]
 
 TOOL_FUNCTIONS: dict[str, Callable[..., dict[str, Any]]] = {
+    "run_command": tools.run_command,
     "configure_submission": tools.configure_submission,
 }

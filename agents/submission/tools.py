@@ -7,11 +7,24 @@ accepts an open-ended dict so nothing is restricted by the Python side.
 from __future__ import annotations
 
 import json
+import subprocess
 from typing import Any
 
 from agents.submission.params import SubmissionParams
 from core.config import NFCORE_PIPELINE, NFCORE_REVISION
 from core.session import SESSION
+
+
+def run_command(command: str) -> dict[str, Any]:
+    """Run a shell command and return its output."""
+    result = subprocess.run(
+        command, shell=True, capture_output=True, text=True, timeout=30,
+    )
+    return {
+        "stdout": result.stdout.strip(),
+        "stderr": result.stderr.strip(),
+        "returncode": result.returncode,
+    }
 
 
 def configure_submission(
