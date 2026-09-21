@@ -186,7 +186,7 @@ def _submit_with_troubleshooting(samplesheet_path: str) -> dict:
     history: list[dict] = []
 
     for attempt in range(1, MAX_RETRIES + 1):
-        outcome = submit_and_monitor(params)
+        outcome = submit_and_monitor(params, resume=(attempt > 1))
 
         if not outcome.get("submitted"):
             print(f"\nSubmission skipped: {outcome.get('reason') or outcome.get('message')}")

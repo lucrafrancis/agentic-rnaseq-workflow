@@ -59,7 +59,7 @@ def build_submission(
     return params
 
 
-def submit_and_monitor(params: SubmissionParams) -> dict:
+def submit_and_monitor(params: SubmissionParams, resume: bool = False) -> dict:
     """Write a run script, present for approval, then execute and monitor.
 
     Returns a summary dict with the outcome: success/failure, log path, and any
@@ -74,7 +74,7 @@ def submit_and_monitor(params: SubmissionParams) -> dict:
         config_path = str(paths.nf_config)
 
     script_path = paths.nextflow_script
-    script_path.write_text(params.to_script(str(paths.nf_params), config_path))
+    script_path.write_text(params.to_script(str(paths.nf_params), config_path, resume=resume))
     script_path.chmod(0o755)
 
     preview = script_path.read_text() + f"\n# {paths.nf_params}:\n" + paths.nf_params.read_text()

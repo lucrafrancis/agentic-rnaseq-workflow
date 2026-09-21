@@ -62,7 +62,12 @@ class SubmissionParams:
     def to_command_string(self) -> str:
         return " ".join(self.to_nextflow_args())
 
-    def to_script(self, params_file: str, config_file: str | None = None) -> str:
+    def to_script(
+        self,
+        params_file: str,
+        config_file: str | None = None,
+        resume: bool = False,
+    ) -> str:
         """Generate a bash script that references a params YAML file."""
         lines = [
             "#!/usr/bin/env bash",
@@ -70,6 +75,10 @@ class SubmissionParams:
             "",
             f"nextflow run {self.pipeline} \\",
             f"  -r {self.revision} \\",
+        ]
+        if resume:
+            lines.append("  -resume \\")
+        lines += [
             f"  --input {shlex.quote(self.input_samplesheet)} \\",
             f"  --outdir {shlex.quote(self.outdir)} \\",
             f"  -profile {self.profile} \\",
