@@ -105,6 +105,9 @@ def _download_stage(prompt: str) -> None:
 
     paths = SESSION.require_paths()
 
+    if not paths.download_metadata.is_file():
+        sys.exit("Download agent failed to resolve the accession. Check the logs above.")
+
     if not paths.download_script.is_file():
         print("No downloads needed — files already present.")
         return

@@ -138,7 +138,7 @@ class TestResolveGse:
     @patch("agents.download.tools._http_get")
     def test_success(self, mock_get, mock_get_json):
         mock_get_json.side_effect = [
-            {"esearchresult": {"idlist": ["12345"]}},
+            {"esearchresult": {"idlist": ["200123456"]}},
             [
                 {
                     "run_accession": "SRR001",
@@ -149,7 +149,10 @@ class TestResolveGse:
                 }
             ],
         ]
-        mock_get.return_value = "Run,SRAStudy\nSRR001,SRP001\n"
+        mock_get.return_value = (
+            "1. Some study\nSRA Run Selector: "
+            "https://www.ncbi.nlm.nih.gov/Traces/study/?acc=SRP001\n"
+        )
 
         runs = _resolve_gse("GSE123456")
         assert len(runs) == 1
@@ -240,7 +243,7 @@ class TestGenerateDownloadScript:
         assert Path(result["script_path"]).is_file()
 
         script = Path(result["script_path"]).read_text()
-        assert "wget" in script
+        assert "curl" in script
         assert "SRR001.fastq.gz" in script
         assert "abc123" in script
 

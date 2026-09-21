@@ -8,11 +8,11 @@ THE CONTRACT:
 
 from __future__ import annotations
 
-import csv
 import hashlib
-import io
 import json
+import re
 import subprocess
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -20,7 +20,10 @@ from typing import Any
 
 Summary = dict[str, Any]
 
-_ENA_FIELDS = "run_accession,fastq_ftp,fastq_md5,fastq_bytes,library_layout"
+_MAX_RETRIES = 3
+_BACKOFF_BASE = 2.0
+
+_ENA_FIELDS = "run_accession,fastq_ftp,fastq_aspera,fastq_md5,fastq_bytes,library_layout"
 _ENA_API = "https://www.ebi.ac.uk/ena/portal/api/filereport"
 _NCBI_ESEARCH = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
 _NCBI_EFETCH = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
@@ -30,8 +33,16 @@ def _http_get(url: str, timeout: int = 30) -> str:
     req = urllib.request.Request(
         url, headers={"User-Agent": "agentic-rnaseq-workflow/0.1"}
     )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read().decode("utf-8")
+    for attempt in range(_MAX_RETRIES):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.read().decode("utf-8")
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and attempt < _MAX_RETRIES - 1:
+                time.sleep(_BACKOFF_BASE ** (attempt + 1))
+                continue
+            raise
+    return ""
 
 
 def _http_get_json(url: str, timeout: int = 30) -> Any:
@@ -42,8 +53,16 @@ def _http_get_json(url: str, timeout: int = 30) -> Any:
             "Accept": "application/json",
         },
     )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    for attempt in range(_MAX_RETRIES):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and attempt < _MAX_RETRIES - 1:
+                time.sleep(_BACKOFF_BASE ** (attempt + 1))
+                continue
+            raise
+    return {}
 
 
 def _compute_md5(filepath: Path) -> str:
@@ -56,10 +75,12 @@ def _compute_md5(filepath: Path) -> str:
 
 def _parse_ena_run(row: dict) -> dict:
     ftp_raw = row.get("fastq_ftp", "")
+    aspera_raw = row.get("fastq_aspera", "")
     md5_raw = row.get("fastq_md5", "")
     bytes_raw = row.get("fastq_bytes", "")
 
     ftp_urls = [u.strip() for u in ftp_raw.split(";") if u.strip()]
+    aspera_urls = [u.strip() for u in aspera_raw.split(";") if u.strip()]
     md5s = [m.strip() for m in md5_raw.split(";") if m.strip()]
     sizes = [s.strip() for s in bytes_raw.split(";") if s.strip()]
 
@@ -70,8 +91,16 @@ def _parse_ena_run(row: dict) -> dict:
         size = int(sizes[i]) if i < len(sizes) and sizes[i] else 0
         md5 = md5s[i] if i < len(md5s) else ""
         total_bytes += size
-        url = ftp if ftp.startswith(("ftp://", "http://")) else f"ftp://{ftp}"
-        files.append({"filename": filename, "url": url, "md5": md5, "bytes": size})
+        if ftp.startswith("ftp://"):
+            url = ftp.replace("ftp://", "http://", 1)
+        elif ftp.startswith("http://") or ftp.startswith("https://"):
+            url = ftp
+        else:
+            url = f"http://{ftp}"
+        entry = {"filename": filename, "url": url, "md5": md5, "bytes": size}
+        if i < len(aspera_urls) and aspera_urls[i]:
+            entry["aspera"] = aspera_urls[i]
+        files.append(entry)
 
     return {
         "run_accession": row.get("run_accession", ""),
@@ -85,8 +114,8 @@ def _parse_ena_run(row: dict) -> dict:
 
 
 def _resolve_gse(gse: str) -> list[dict]:
-    """GSE -> NCBI SRA UIDs -> run info CSV -> ENA FASTQ URLs."""
-    search_url = f"{_NCBI_ESEARCH}?db=sra&term={gse}&retmax=500&retmode=json"
+    """GSE -> GDS record -> BioProject/SRP -> ENA FASTQ URLs."""
+    search_url = f"{_NCBI_ESEARCH}?db=gds&term={gse}[ACCN]&retmode=json"
     try:
         data = _http_get_json(search_url)
     except (urllib.error.URLError, json.JSONDecodeError):
@@ -96,29 +125,17 @@ def _resolve_gse(gse: str) -> list[dict]:
     if not uid_list:
         return []
 
-    uids = ",".join(uid_list)
-    fetch_url = f"{_NCBI_EFETCH}?db=sra&id={uids}&rettype=runinfo&retmode=csv"
+    fetch_url = f"{_NCBI_EFETCH}?db=gds&id={uid_list[0]}&retmode=text"
     try:
-        csv_text = _http_get(fetch_url)
+        record = _http_get(fetch_url)
     except urllib.error.URLError:
         return []
 
-    reader = csv.DictReader(io.StringIO(csv_text))
-    sra_study = None
-    srr_ids = []
-    for row in reader:
-        run = row.get("Run", "").strip()
-        if run:
-            srr_ids.append(run)
-        if not sra_study and row.get("SRAStudy", "").strip():
-            sra_study = row["SRAStudy"].strip()
+    match = re.search(r"acc=(PRJNA\d+|SRP\d+|ERP\d+|DRP\d+)", record)
+    if match:
+        return _resolve_study(match.group(1))
 
-    if not srr_ids:
-        return []
-
-    if sra_study:
-        return _resolve_study(sra_study)
-    return _resolve_runs(srr_ids)
+    return []
 
 
 def _resolve_study(study: str) -> list[dict]:
@@ -319,6 +336,8 @@ def generate_download_script(output_dir: str) -> Summary:
             "script_path": None,
         }
 
+    has_aspera = any(dl.get("aspera") for dl in downloads)
+
     lines = [
         "#!/usr/bin/env bash",
         "set -euo pipefail",
@@ -330,14 +349,61 @@ def generate_download_script(output_dir: str) -> Summary:
         'mkdir -p "$OUTPUT_DIR"',
         'cd "$OUTPUT_DIR"',
         "",
+        "# --- Detect fastest available download tool ---",
     ]
+
+    if has_aspera:
+        lines += [
+            "ASPERA_KEY=${ASPERA_KEY:-${HOME}/.aspera/connect/etc/asperaweb_id_dsa.openssh}",
+            'if command -v ascp &>/dev/null && [ -f "$ASPERA_KEY" ]; then',
+            '  DL_METHOD="aspera"',
+            '  echo "Using Aspera (fastest)"',
+            'elif command -v aria2c &>/dev/null; then',
+            '  DL_METHOD="aria2c"',
+            '  echo "Using aria2c (multi-connection)"',
+            "else",
+            '  DL_METHOD="curl"',
+            '  echo "Using curl (install aria2c or Aspera for faster downloads)"',
+            "fi",
+        ]
+    else:
+        lines += [
+            'if command -v aria2c &>/dev/null; then',
+            '  DL_METHOD="aria2c"',
+            '  echo "Using aria2c (multi-connection)"',
+            "else",
+            '  DL_METHOD="curl"',
+            '  echo "Using curl (install aria2c for faster downloads)"',
+            "fi",
+        ]
+
+    lines.append("")
 
     for dl in downloads:
         lines.append(f'echo "Downloading {dl["filename"]} ..."')
-        lines.append(
-            f'wget -q --show-progress --retry-connrefused --waitretry=5 -t 3 \\\n'
-            f'  -O "{dl["filename"]}" "{dl["url"]}"'
-        )
+        if has_aspera and dl.get("aspera"):
+            lines += [
+                'if [ "$DL_METHOD" = "aspera" ]; then',
+                f'  ascp -QT -l 300m -P33001 -i "$ASPERA_KEY" \\\n'
+                f'    {dl["aspera"]} ./',
+                'elif [ "$DL_METHOD" = "aria2c" ]; then',
+                f'  aria2c -x 4 -s 4 --retry-wait=5 -m 3 -q \\\n'
+                f'    -o "{dl["filename"]}" "{dl["url"]}"',
+                "else",
+                f'  curl -fSL --retry 3 --retry-delay 5 \\\n'
+                f'    -o "{dl["filename"]}" "{dl["url"]}"',
+                "fi",
+            ]
+        else:
+            lines += [
+                'if [ "$DL_METHOD" = "aria2c" ]; then',
+                f'  aria2c -x 4 -s 4 --retry-wait=5 -m 3 -q \\\n'
+                f'    -o "{dl["filename"]}" "{dl["url"]}"',
+                "else",
+                f'  curl -fSL --retry 3 --retry-delay 5 \\\n'
+                f'    -o "{dl["filename"]}" "{dl["url"]}"',
+                "fi",
+            ]
         lines.append("")
 
     md5_checks = [dl for dl in downloads if dl.get("md5")]

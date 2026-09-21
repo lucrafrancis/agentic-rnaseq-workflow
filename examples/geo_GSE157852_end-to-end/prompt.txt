@@ -1,0 +1,4 @@
+GSE157852 — SARS-CoV-2 neural tropism in human brain organoids.
+Homo sapiens, GRCh38.
+Download the FASTQ files from ENA — ignore any FASTQ files already present locally.
+Only use 2 samples per condition for a quick test run.
