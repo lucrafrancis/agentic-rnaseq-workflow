@@ -8,7 +8,7 @@ Four stages, with human approval **between** stages (not inside the agent loop):
 
 0. **Download agent** (`agents/download/`) — resolves GEO/SRA accessions via NCBI/ENA APIs, generates a download script (aspera > aria2c > curl), validates MD5 checksums. Only runs when the prompt contains an accession but no FASTQ path.
 1. **Samplesheet agent** (`agents/samplesheet/`) — scans FASTQs, reads metadata, matches pairs, drafts/validates/saves a sample sheet, writes a report. Fully implemented and tested with real GEO data.
-2. **Submission agent** (`agents/submission/`) — reads the prompt and configures nextflow params (genome, skip_alignment, max_memory, etc.) via an open-ended tool. Writes `run_nextflow.sh` + `nf_params.yml` (YAML preserves boolean types for nf-schema). Human approves the script before execution.
+2. **Submission agent** (`agents/submission/`) — reads the prompt and configures nextflow params (genome, skip_alignment, etc.) via an open-ended tool. Has a `run_command` tool to check system resources (RAM, CPUs) before configuring — always sets resource limits based on the actual machine. Writes `run_nextflow.sh` + `nf_params.yml` + `custom.config`. Pipeline params go in the YAML; resource limits (`max_memory`, `max_cpus`, `max_time`) go in `custom.config` as nextflow `resourceLimits` to avoid nf-schema validation warnings. Human approves the script before execution.
 3. **Analysis agent** (`agents/analysis/`) — downstream DE, enrichment, QC, and reporting on nf-core/rnaseq outputs. Python-only (PyDESeq2, gseapy, numpy PCA). Optionally accepts a paper PDF as context via Claude's native base64 content blocks. Fully implemented and tested.
 
 The full flow in `run.py`: download agent (if needed) → human approves download script → samplesheet agent → human approves sample sheet → submission agent configures params → human approves `run_nextflow.sh` → nextflow runs (with troubleshooting on failure) → post-run warning review → analysis agent runs downstream analysis.
@@ -29,7 +29,7 @@ The prompt file describes the data (FASTQ location, organism, metadata path, str
 - Human approval belongs between stages, never inside the agent loop
 - Keep code minimal — no bloat, no premature abstractions
 - Tests are offline (no API calls)
-- Tools must enforce correctness, not the LLM — paths are resolved to absolute in the tools themselves (`scan_fastqs`, `draft_samplesheet`), and `save_samplesheet` always writes to the canonical run directory location. The LLM is a lossy intermediary; don't trust it to preserve values faithfully between tool calls.
+- Tools must enforce correctness, not the LLM — paths are resolved to absolute in the tools themselves (`scan_fastqs`, `draft_samplesheet`), `save_samplesheet` always writes to the canonical run directory location, and `SubmissionParams` routes resource limits to `custom.config` vs pipeline params to `nf_params.yml` automatically. The LLM is a lossy intermediary; don't trust it to preserve values faithfully between tool calls.
 
 ## Prerequisites
 
@@ -51,7 +51,7 @@ The prompt file describes the data (FASTQ location, organism, metadata path, str
 
 ## Troubleshooting and warnings
 
-- On pipeline failure: conversational troubleshooting — LLM (Sonnet) reads the full log, explains the issue, proposes a fix via `propose_fix` tool. User can chat, ask questions, or redirect before approving. Max 3 attempts. All logged to `troubleshooting.jsonl`.
+- On pipeline failure: conversational troubleshooting — LLM (Sonnet) reads the full log, explains the issue, proposes a fix via `propose_fix` tool. User can chat, ask questions, or redirect before approving. Max 3 attempts. All logged to `troubleshooting.jsonl`. Watchdog kills hung nextflow processes (SIGTERM → 10s grace → SIGKILL) so troubleshooting isn't blocked.
 - On success: LLM scans log for WARN lines and produces a concise summary of anything affecting downstream analysis.
 - Samplesheet agent cites GEO/SRA URLs when assigning conditions, with instructions on where to verify.
 
