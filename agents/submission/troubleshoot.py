@@ -38,10 +38,14 @@ user is satisfied, they'll approve your fix.
 
 ## Diagnosing the environment
 
-You have a run_command tool to inspect the machine and environment. Use it to check
+You have a check_environment tool to inspect the machine (read-only). Use it to check
 things the log alone can't tell you — Docker memory limits, disk space, running
 processes, etc. For OOM kills (exit 137), always check `docker info` to see if
 Docker's memory limit is the bottleneck, not just system RAM.
+
+IMPORTANT: Do NOT use check_environment to run pipelines, modify files, or execute
+nextflow commands. It is strictly for inspection. Retries with -resume are handled
+automatically by the framework when you propose a fix and the user approves it.
 
 ## nf-core/rnaseq knowledge
 
@@ -75,12 +79,13 @@ When calling propose_fix, classify the fix as:
 If this is attempt 2+, previous fixes didn't work — try something different.
 """
 
-_RUN_COMMAND_TOOL = {
-    "name": "run_command",
+_CHECK_ENV_TOOL = {
+    "name": "check_environment",
     "description": (
-        "Run a shell command on the machine and return stdout/stderr. "
+        "Run a read-only shell command to inspect the machine and environment. "
         "Use this to check Docker memory limits, disk space, running processes, "
-        "or anything else the log alone can't tell you."
+        "or anything else the log alone can't tell you. "
+        "Do NOT use this to run pipelines, modify files, or execute nextflow."
     ),
     "input_schema": {
         "type": "object",
@@ -203,7 +208,7 @@ def diagnose_and_propose(
             model=config.MODEL_SONNET,
             max_tokens=2048,
             system=_SYSTEM_PROMPT,
-            tools=[_RUN_COMMAND_TOOL, _PROPOSE_FIX_TOOL],
+            tools=[_CHECK_ENV_TOOL, _PROPOSE_FIX_TOOL],
             messages=messages,
         )
         messages.append({"role": "assistant", "content": response.content})
@@ -218,9 +223,9 @@ def diagnose_and_propose(
             for block in response.content:
                 if block.type != "tool_use":
                     continue
-                if block.name == "run_command":
+                if block.name == "check_environment":
                     result = run_command(block.input["command"])
-                    print(f"\n🔧 run_command({block.input['command']})")
+                    print(f"\n🔧 check_environment({block.input['command']})")
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": block.id,
