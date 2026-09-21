@@ -5,11 +5,13 @@
 .venv/
 __pycache__/
 *.pyc
+.pytest_cache/
 
 # Secrets
 .env
 
 # Data & run outputs (regenerated, not source)
+data/
 runs/
 examples/demo_fastqs/fastqs/
 examples/demo_fastqs/staged/
@@ -18,6 +20,7 @@ examples/nfcore_test/fastqs/
 examples/nfcore_test/samplesheet.csv
 examples/geo_test/fastqs/
 examples/geo_test/samplesheet.csv
+examples/geo_GSE157852/fastqs/
 
 # uv
 .uv/

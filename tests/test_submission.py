@@ -19,32 +19,17 @@ class TestSubmissionParams:
         assert params.genome == "GRCh38"
         assert params.profile == "docker"
 
-    def test_to_command_string(self):
+    def test_to_script(self):
         params = default_params("/sheet.csv", "/out")
-        cmd = params.to_command_string()
-        assert "nextflow run nf-core/rnaseq" in cmd
-        assert "--input /sheet.csv" in cmd
-        assert "--outdir /out" in cmd
+        script = params.to_script("/params.yml")
+        assert "nextflow run nf-core/rnaseq" in script
+        assert "-params-file" in script
 
-    def test_extra_args(self):
-        params = SubmissionParams(
-            input_samplesheet="/sheet.csv",
-            outdir="/out",
-            extra_args={"aligner": "star_salmon", "skip_qc": True},
-        )
-        args = params.to_nextflow_args()
-        assert "--aligner" in args
-        assert "star_salmon" in args
-        assert "--skip_qc" in args
-
-    def test_bool_false_excluded(self):
-        params = SubmissionParams(
-            input_samplesheet="/sheet.csv",
-            outdir="/out",
-            extra_args={"skip_qc": False},
-        )
-        args = params.to_nextflow_args()
-        assert "--skip_qc" not in args
+    def test_to_script_with_resume_and_config(self):
+        params = default_params("/sheet.csv", "/out")
+        script = params.to_script("/params.yml", config_file="/custom.config", resume=True)
+        assert "-resume" in script
+        assert "-c /custom.config" in script
 
     def test_to_dict(self):
         params = default_params("/sheet.csv", "/out")
@@ -133,8 +118,7 @@ class TestConfigureSubmission:
         paths.samplesheet.write_text("sample,fastq_1,fastq_2,strandedness\n")
 
         result = configure_submission(genome="GRCh38")
-        assert "command" in result
-        assert "GRCh38" in result["command"]
+        assert result["genome"] == "GRCh38"
         assert paths.params_file.is_file()
 
         saved = json.loads(paths.params_file.read_text())

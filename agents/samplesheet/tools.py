@@ -49,15 +49,15 @@ def read_file(filepath: str, max_lines: int = 50) -> Summary:
         return {"error": "not_a_file", "message": f"'{filepath}' does not exist."}
 
     try:
-        lines = path.read_text().splitlines()[:max_lines]
+        all_lines = path.read_text().splitlines()
     except UnicodeDecodeError:
         return {"error": "binary_file", "message": f"'{filepath}' is not a text file."}
 
     return {
         "filepath": str(path),
-        "n_lines": len(lines),
-        "truncated": len(path.read_text().splitlines()) > max_lines,
-        "content": "\n".join(lines),
+        "n_lines": min(len(all_lines), max_lines),
+        "truncated": len(all_lines) > max_lines,
+        "content": "\n".join(all_lines[:max_lines]),
     }
 
 

@@ -1,33 +1,11 @@
-"""The agent loop for downstream analysis.
-
-Same pattern as the samplesheet loop: send conversation + tool schemas to Claude,
-dispatch tool calls, append results, repeat until the agent finishes or MAX_TURNS.
-"""
+"""The agent loop for downstream analysis."""
 
 from __future__ import annotations
 
-import json
-
-import anthropic
-
-from core import config
 from agents.analysis.prompts import SYSTEM_PROMPT
 from agents.analysis.schemas import TOOL_FUNCTIONS, TOOL_SCHEMAS
+from core.loop import run_agent_loop
 from core.session import SESSION
-
-
-def _run_tool(name: str, args: dict) -> dict:
-    try:
-        return TOOL_FUNCTIONS[name](**args)
-    except Exception as exc:
-        return {"error": type(exc).__name__, "message": str(exc)}
-
-
-def _log_tool_call(name: str, args: dict, summary: dict) -> None:
-    log_path = SESSION.require_paths().analysis_tool_log
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    with log_path.open("a") as f:
-        f.write(json.dumps({"tool": name, "args": args, "summary": summary}) + "\n")
 
 
 def run_analysis_agent(user_prompt: str | list) -> list[dict]:
@@ -35,44 +13,11 @@ def run_analysis_agent(user_prompt: str | list) -> list[dict]:
 
     user_prompt can be a string or a list of content blocks (for PDF inclusion).
     """
-    client = anthropic.Anthropic()
-    messages: list[dict] = [{"role": "user", "content": user_prompt}]
-
-    for _turn in range(config.MAX_TURNS):
-        response = client.messages.create(
-            model=config.MODEL,
-            max_tokens=config.MAX_TOKENS,
-            system=SYSTEM_PROMPT,
-            tools=TOOL_SCHEMAS,
-            messages=messages,
-        )
-        messages.append({"role": "assistant", "content": response.content})
-
-        for block in response.content:
-            if block.type == "text" and block.text.strip():
-                print(f"\n\U0001f9e0 {block.text.strip()}")
-
-        if response.stop_reason != "tool_use":
-            if response.stop_reason != "end_turn":
-                print(f"\n⚠️  Stopped early: stop_reason={response.stop_reason!r}")
-            break
-
-        tool_results = []
-        for block in response.content:
-            if block.type != "tool_use":
-                continue
-            summary = _run_tool(block.name, block.input)
-            _log_tool_call(block.name, block.input, summary)
-            arg_str = ", ".join(
-                f"{k}={v}" for k, v in block.input.items()
-                if k not in ("report_markdown", "gene_list", "rows")
-            )
-            print(f"\U0001f527 {block.name}({arg_str})")
-            tool_results.append({
-                "type": "tool_result",
-                "tool_use_id": block.id,
-                "content": json.dumps(summary),
-            })
-        messages.append({"role": "user", "content": tool_results})
-
-    return messages
+    return run_agent_loop(
+        system_prompt=SYSTEM_PROMPT,
+        tool_schemas=TOOL_SCHEMAS,
+        tool_functions=TOOL_FUNCTIONS,
+        user_prompt=user_prompt,
+        log_path=SESSION.require_paths().analysis_tool_log,
+        hide_args=frozenset({"report_markdown", "gene_list", "rows"}),
+    )

@@ -41,27 +41,6 @@ class SubmissionParams:
         """Params that belong in nextflow config (max_memory, max_cpus, max_time)."""
         return {k: v for k, v in self.extra_args.items() if k in _NEXTFLOW_CONFIG_KEYS}
 
-    def to_nextflow_args(self) -> list[str]:
-        """Build the nextflow run command arguments."""
-        args = [
-            "nextflow", "run", self.pipeline,
-            "-r", self.revision,
-            "--input", self.input_samplesheet,
-            "--outdir", self.outdir,
-            "--genome", self.genome,
-            "-profile", self.profile,
-        ]
-        for key, value in self.extra_args.items():
-            if isinstance(value, bool):
-                if value:
-                    args.append(f"--{key}")
-            else:
-                args.extend([f"--{key}", str(value)])
-        return args
-
-    def to_command_string(self) -> str:
-        return " ".join(self.to_nextflow_args())
-
     def to_script(
         self,
         params_file: str,

@@ -11,7 +11,6 @@ import subprocess
 from typing import Any
 
 from agents.submission.params import SubmissionParams
-from core.config import NFCORE_PIPELINE, NFCORE_REVISION
 from core.session import SESSION
 
 
@@ -58,7 +57,6 @@ def configure_submission(
     paths.params_file.write_text(json.dumps(params.to_dict(), indent=2) + "\n")
 
     return {
-        "command": params.to_command_string(),
         "params_file": str(paths.params_file),
         "genome": genome,
         "profile": profile,
