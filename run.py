@@ -11,6 +11,8 @@ Three stages with human approval between them:
 from __future__ import annotations
 
 import base64
+import json
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -44,6 +46,11 @@ def main() -> None:
     SESSION.begin_run(project_name)
     shutil.copy2(prompt_file, SESSION.paths.dir / "prompt.txt")
     print(f"Run directory: {SESSION.paths.dir}")
+
+    # --- Stage 0: data download (if GEO/SRA accession in prompt) ---
+    accession = _extract_accession(prompt)
+    if accession:
+        _download_stage(prompt)
 
     # --- Stage 1: samplesheet generation ---
     from agents.samplesheet.loop import run_samplesheet_agent
@@ -82,15 +89,68 @@ def main() -> None:
     _run_analysis(outcome["outdir"])
 
 
+def _extract_accession(prompt: str) -> str | None:
+    """Extract a GEO/SRA accession from the prompt text."""
+    m = re.search(r"\b(GSE\d+|SRP\d+|ERP\d+|DRP\d+|PRJNA\d+)\b", prompt, re.IGNORECASE)
+    return m.group(1) if m else None
+
+
+def _download_stage(prompt: str) -> None:
+    """Stage 0: resolve accession and download FASTQs if needed."""
+    from agents.download.loop import run_download_agent
+    from agents.download.tools import execute_download, validate_downloads
+
+    print("\n--- Stage 0: Data Download ---")
+    run_download_agent(prompt)
+
+    paths = SESSION.require_paths()
+
+    if not paths.download_script.is_file():
+        print("No downloads needed — files already present.")
+        return
+
+    script_content = paths.download_script.read_text()
+    metadata = json.loads(paths.download_metadata.read_text())
+
+    n_downloads = metadata.get("n_downloads", "?")
+    download_bytes = metadata.get("download_bytes", 0)
+    size_str = f"{download_bytes / (1024**3):.2f} GB" if download_bytes else "unknown"
+
+    result = present_for_approval(
+        title="Download script",
+        preview=script_content,
+        file_path=paths.download_script,
+        summary_stats={"files_to_download": n_downloads, "estimated_size": size_str},
+    )
+
+    if not result.approved:
+        print(f"Download rejected: {result.reason or 'none given'}")
+        sys.exit(1)
+
+    print("\nDownloading...")
+    exec_result = execute_download(str(paths.download_script))
+    if not exec_result["success"]:
+        sys.exit("Download failed. Check output above.")
+
+    print("Validating checksums...")
+    val_result = validate_downloads(metadata["runs"], metadata["output_dir"])
+    if not val_result["all_valid"]:
+        print("\n⚠️  Checksum validation failed:")
+        for f in val_result["files"]:
+            if f["status"] not in ("pass", "no_checksum"):
+                print(f"  {f['filename']}: {f['status']}")
+        sys.exit(1)
+
+    print(f"✓ All {val_result['n_pass']} file(s) validated (MD5).")
+
+
 def _submit_with_troubleshooting(samplesheet_path: str) -> dict:
     """Run Stage 2 with LLM-assisted troubleshooting on failure."""
-    from agents.submission.errors import diagnose_log
     from agents.submission.submit import build_submission, submit_and_monitor
     from agents.submission.troubleshoot import (
         MAX_RETRIES,
         apply_parameter_fix,
         diagnose_and_propose,
-        present_proposal,
         wait_for_user_action,
     )
 
@@ -129,20 +189,15 @@ def _submit_with_troubleshooting(samplesheet_path: str) -> dict:
                     print(f"  Attempt {h['attempt']}: {h['root_cause']} → {h['fix_description']}")
             sys.exit(1)
 
-        diagnoses = diagnose_log(outcome.get("log_path", ""))
         print("Analysing failure...")
         try:
-            proposal = diagnose_and_propose(outcome, params, diagnoses, attempt, history)
+            proposal = diagnose_and_propose(outcome, params, attempt, history)
         except Exception as exc:
             print(f"Troubleshooting failed: {exc}")
             sys.exit(1)
 
-        decision = present_proposal(proposal, attempt)
-        if decision == "abort":
+        if proposal is None:
             print("Pipeline aborted by user.")
-            sys.exit(1)
-        if decision == "skip":
-            print("Troubleshooting skipped.")
             sys.exit(1)
 
         category = proposal.get("category", "unfixable")
@@ -153,14 +208,8 @@ def _submit_with_troubleshooting(samplesheet_path: str) -> dict:
         if category == "parameter_change" and proposal.get("parameter_changes"):
             apply_parameter_fix(params, proposal["parameter_changes"])
             print("Parameters updated. Retrying...")
-        elif category == "user_action":
-            if not wait_for_user_action(proposal):
-                print("Pipeline aborted by user.")
-                sys.exit(1)
-            print("Retrying...")
-        elif category == "config_change":
-            print(f"Config change suggested: {proposal.get('fix_description')}")
-            if not wait_for_user_action(proposal):
+        elif category in ("user_action", "config_change"):
+            if not wait_for_user_action():
                 print("Pipeline aborted by user.")
                 sys.exit(1)
             print("Retrying...")

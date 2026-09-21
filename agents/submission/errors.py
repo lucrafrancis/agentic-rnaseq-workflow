@@ -28,7 +28,7 @@ _ERROR_PATTERNS: list[tuple[str, re.Pattern, str]] = [
     ),
     (
         "out_of_memory",
-        re.compile(r"Process.*exceeded.*memory|OutOfMemoryError|oom-kill", re.IGNORECASE),
+        re.compile(r"Process.*exceed(?:s|ed).*memory|OutOfMemoryError|oom-kill", re.IGNORECASE),
         "A process ran out of memory. Consider increasing memory limits or using a retry strategy.",
     ),
     (

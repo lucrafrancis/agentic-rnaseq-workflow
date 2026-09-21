@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import json
 import subprocess
+import threading
+import time
 from pathlib import Path
 
 from agents.submission.errors import diagnose_log, format_diagnoses
@@ -83,11 +85,28 @@ def submit_and_monitor(params: SubmissionParams) -> dict:
             text=True,
             cwd=str(paths.dir),
         )
+
+        _HANG_TIMEOUT = 60
+        pipeline_failed = False
+
+        def _watchdog():
+            """Kill nextflow if it hangs after a detected failure."""
+            time.sleep(_HANG_TIMEOUT)
+            if proc.poll() is None:
+                print(f"\nNextflow hung for {_HANG_TIMEOUT}s after failure. Terminating...")
+                proc.terminate()
+
         with log_path.open("w") as log_file:
             for line in proc.stdout:
                 print(line, end="")
                 log_file.write(line)
                 log_file.flush()
+                if not pipeline_failed and (
+                    "Pipeline completed with errors" in line
+                    or "Pipeline failed" in line
+                ):
+                    pipeline_failed = True
+                    threading.Thread(target=_watchdog, daemon=True).start()
         proc.wait()
         print(f"\nNextflow exited (code {proc.returncode}).")
 

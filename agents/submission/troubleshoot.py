@@ -1,8 +1,9 @@
 """LLM-assisted troubleshooting and post-run warning review.
 
 Two modes:
-  - Failure: feeds the error log to the LLM, which proposes a fix. User approves
-    before anything changes.
+  - Failure: interactive conversation with the LLM — it reads the full log,
+    explains the issue, and proposes a fix. The user can chat, ask questions,
+    and redirect before approving.
   - Success: scans the log for warnings and produces a concise summary.
 
 All events are logged to troubleshooting.jsonl for auditability.
@@ -17,7 +18,6 @@ from pathlib import Path
 
 import anthropic
 
-from agents.submission.errors import Diagnosis
 from agents.submission.params import SubmissionParams
 from core import config
 from core.session import SESSION
@@ -26,7 +26,14 @@ MAX_RETRIES = 3
 
 _SYSTEM_PROMPT = """\
 You are an expert nf-core/rnaseq troubleshooter. A pipeline run has failed and you
-need to diagnose the issue and propose a concrete fix.
+need to help the user diagnose and fix it.
+
+Read the full nextflow log, identify what went wrong, and explain it clearly to the
+user. Then call the propose_fix tool with a concrete fix.
+
+The user may want to discuss — ask questions, provide context about their environment,
+or suggest alternatives. Respond helpfully and adapt your proposal as needed. When the
+user is satisfied, they'll approve your fix.
 
 ## nf-core/rnaseq knowledge
 
@@ -46,29 +53,52 @@ Common fixes for known failure modes:
 - **Disk space**: nextflow work directories can be large. Suggest `nextflow clean`.
 - **Strandedness issues**: if salmon quant fails on strandedness, suggest `auto`.
 
-## Instructions
+## Fix categories
 
-1. Read the error log and identify the root cause.
-2. Classify the fix:
-   - "parameter_change" — a nextflow/nf-core parameter to add or change
-   - "user_action" — something the user must do outside the pipeline
-   - "config_change" — a nextflow.config change (memory limits, retry strategy)
-   - "unfixable" — beyond automated troubleshooting
-3. For parameter_change: include the `-resume` flag so completed steps aren't re-run.
-4. Be specific — name the exact parameter and value.
-5. If this is attempt 2+, the previous fix didn't work. Try something different.
+When calling propose_fix, classify the fix as:
+- "parameter_change" — a nextflow parameter to add or change (always include -resume)
+- "user_action" — something the user must do outside the pipeline (start Docker, etc.)
+- "config_change" — a nextflow.config edit
+- "unfixable" — beyond automated troubleshooting
 
-Respond as JSON (no markdown fences):
-{
-  "root_cause": "one-line summary",
-  "category": "parameter_change|user_action|config_change|unfixable",
-  "fix_description": "what to change and why",
-  "parameter_changes": {"key": "value"},
-  "user_instructions": "what the user needs to do"
-}
-
-Do not wrap the JSON in markdown code fences. Return only the JSON object.
+If this is attempt 2+, previous fixes didn't work — try something different.
 """
+
+_PROPOSE_FIX_TOOL = {
+    "name": "propose_fix",
+    "description": (
+        "Propose a concrete fix for the pipeline failure. Call this after explaining "
+        "the issue to the user. They will see your proposal and can approve, discuss "
+        "further, or ask you to try a different approach."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "root_cause": {
+                "type": "string",
+                "description": "One-line summary of what went wrong.",
+            },
+            "category": {
+                "type": "string",
+                "enum": ["parameter_change", "user_action", "config_change", "unfixable"],
+                "description": "Type of fix needed.",
+            },
+            "fix_description": {
+                "type": "string",
+                "description": "What to change and why.",
+            },
+            "parameter_changes": {
+                "type": "object",
+                "description": "Nextflow parameters to add or change (for parameter_change).",
+            },
+            "user_instructions": {
+                "type": "string",
+                "description": "What the user needs to do (for user_action or config_change).",
+            },
+        },
+        "required": ["root_cause", "category", "fix_description"],
+    },
+}
 
 
 def _log_event(event: dict) -> None:
@@ -78,51 +108,44 @@ def _log_event(event: dict) -> None:
         f.write(json.dumps(event) + "\n")
 
 
-def _get_log_tail(log_path: str, n_lines: int = 200) -> str:
+def _read_log(log_path: str) -> str:
     path = Path(log_path)
     if not path.is_file():
         return "(log file not found)"
-    lines = path.read_text().splitlines()
-    return "\n".join(lines[-n_lines:])
+    return path.read_text()
 
 
-def _parse_json_response(raw: str) -> dict:
-    """Extract JSON from an LLM response, handling markdown fences."""
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        pass
-    # Strip markdown code fences
-    import re
-    match = re.search(r"```(?:json)?\s*\n(.*?)\n```", raw, re.DOTALL)
-    if match:
-        try:
-            return json.loads(match.group(1))
-        except json.JSONDecodeError:
-            pass
-    # Try finding first { to last }
-    start = raw.find("{")
-    end = raw.rfind("}")
-    if start != -1 and end != -1:
-        try:
-            return json.loads(raw[start : end + 1])
-        except json.JSONDecodeError:
-            pass
-    return {"category": "unfixable", "root_cause": "Could not parse LLM response", "raw_response": raw}
+def _print_proposal(proposal: dict) -> None:
+    """Display a fix proposal to the user."""
+    print(f"\n  Root cause: {proposal.get('root_cause', 'unknown')}")
+    print(f"  Category:   {proposal.get('category', 'unknown')}")
+    print(f"  Fix:        {proposal.get('fix_description', 'none proposed')}")
+
+    if proposal.get("parameter_changes"):
+        print(f"\n  Parameter changes:")
+        for k, v in proposal["parameter_changes"].items():
+            print(f"    --{k} {v}")
+
+    if proposal.get("user_instructions"):
+        print(f"\n  Action needed:")
+        print(f"    {proposal['user_instructions']}")
 
 
 def diagnose_and_propose(
     outcome: dict,
     params: SubmissionParams,
-    diagnoses: list[Diagnosis],
     attempt: int,
     history: list[dict],
-) -> dict:
-    """Ask the LLM to diagnose a failure and propose a fix.
+) -> dict | None:
+    """Interactive troubleshooting conversation with the LLM.
 
-    Returns the parsed proposal dict, or an error dict if parsing fails.
+    The LLM reads the full nextflow log, explains the issue, and proposes a fix
+    via the propose_fix tool. The user can chat — ask questions, provide context,
+    or redirect — before approving. Returns the approved proposal dict, or None
+    if the user quits.
     """
-    log_tail = _get_log_tail(outcome.get("log_path", ""))
+    client = anthropic.Anthropic()
+    log_content = _read_log(outcome.get("log_path", ""))
 
     history_text = ""
     if history:
@@ -131,65 +154,66 @@ def diagnose_and_propose(
             for h in history
         )
 
-    user_message = (
+    initial_message = (
         f"Attempt {attempt} of {MAX_RETRIES}.\n\n"
         f"Submission parameters:\n{json.dumps(params.to_dict(), indent=2)}\n\n"
-        f"Pattern-matched diagnoses:\n"
-        + ("\n".join(f"  - [{d.category}] {d.line}\n    {d.suggestion}" for d in diagnoses) or "  (none matched)")
-        + f"\n\nNextflow log (last 200 lines):\n{log_tail}"
+        f"Nextflow log:\n{log_content}"
         + history_text
     )
 
-    client = anthropic.Anthropic()
-    response = client.messages.create(
-        model=config.MODEL_STRONG,
-        max_tokens=2048,
-        system=_SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_message}],
-    )
+    messages: list[dict] = [{"role": "user", "content": initial_message}]
+    proposal: dict | None = None
 
-    raw = response.content[0].text.strip()
-    proposal = _parse_json_response(raw)
-
-    _log_event({"event": "diagnosis", "attempt": attempt, "proposal": proposal})
-    return proposal
-
-
-def present_proposal(proposal: dict, attempt: int) -> str:
-    """Show the LLM's proposal to the user and get their decision.
-
-    Returns: "approve", "skip", or "abort".
-    """
     print(f"\n{'='*60}")
     print(f"  Troubleshooting — attempt {attempt}/{MAX_RETRIES}")
-    print(f"{'='*60}\n")
-    print(f"Root cause: {proposal.get('root_cause', 'unknown')}")
-    print(f"Category:   {proposal.get('category', 'unknown')}")
-    print(f"Fix:        {proposal.get('fix_description', 'none proposed')}")
+    print(f"{'='*60}")
 
-    if proposal.get("parameter_changes"):
-        print(f"\nParameter changes:")
-        for k, v in proposal["parameter_changes"].items():
-            print(f"  --{k} {v}")
-
-    if proposal.get("user_instructions"):
-        print(f"\nAction required from you:")
-        print(f"  {proposal['user_instructions']}")
-
-    print()
     while True:
+        response = client.messages.create(
+            model=config.MODEL_STRONG,
+            max_tokens=2048,
+            system=_SYSTEM_PROMPT,
+            tools=[_PROPOSE_FIX_TOOL],
+            messages=messages,
+        )
+        messages.append({"role": "assistant", "content": response.content})
+
+        for block in response.content:
+            if hasattr(block, "text") and block.text.strip():
+                print(f"\n🔍 {block.text.strip()}")
+
+        if response.stop_reason == "tool_use":
+            tool_results = []
+            for block in response.content:
+                if block.type == "tool_use" and block.name == "propose_fix":
+                    proposal = block.input
+                    _log_event({"event": "diagnosis", "attempt": attempt, "proposal": proposal})
+                    _print_proposal(proposal)
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": "Proposal shown to user. Waiting for their response.",
+                    })
+            messages.append({"role": "user", "content": tool_results})
+            continue
+
         try:
-            raw = input("[a]pply fix & retry / [s]kip troubleshooting / [q]uit pipeline: ")
+            if proposal:
+                raw = input("\n[a]pply fix / [q]uit / or type to discuss: ").strip()
+            else:
+                raw = input("\n[q]uit / or type to discuss: ").strip()
         except EOFError:
-            return "abort"
-        choice = raw.strip().lower()
-        if choice in ("a", "apply"):
-            return "approve"
-        if choice in ("s", "skip"):
-            return "skip"
-        if choice in ("q", "quit"):
-            return "abort"
-        print("Please enter 'a', 's', or 'q'.")
+            return None
+
+        if raw.lower() in ("a", "apply") and proposal:
+            return proposal
+        if raw.lower() in ("q", "quit"):
+            return None
+        if not raw:
+            continue
+
+        messages.append({"role": "user", "content": raw})
+        proposal = None
 
 
 def apply_parameter_fix(params: SubmissionParams, changes: dict) -> None:
@@ -205,9 +229,9 @@ def apply_parameter_fix(params: SubmissionParams, changes: dict) -> None:
     _log_event({"event": "params_updated", "changes": changes})
 
 
-def wait_for_user_action(proposal: dict) -> bool:
-    """Wait for the user to complete a manual action. Returns True if they're ready to retry."""
-    print(f"\nComplete the action above, then press Enter to retry (or 'q' to quit).")
+def wait_for_user_action() -> bool:
+    """Wait for the user to complete a manual action before retrying."""
+    print("\nComplete the action described above, then press Enter to retry (or 'q' to quit).")
     try:
         raw = input("> ").strip().lower()
     except EOFError:
@@ -235,11 +259,11 @@ def review_warnings(log_path: str) -> str | None:
 
     Returns the summary string, or None if there are no warnings.
     """
-    log_tail = _get_log_tail(log_path, n_lines=500)
-    if "(log file not found)" in log_tail:
+    log_content = _read_log(log_path)
+    if "(log file not found)" in log_content:
         return None
 
-    warn_lines = [line for line in log_tail.splitlines() if "WARN" in line]
+    warn_lines = [line for line in log_content.splitlines() if "WARN" in line]
     if not warn_lines:
         return None
 

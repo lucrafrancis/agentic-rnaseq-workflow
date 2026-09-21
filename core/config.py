@@ -62,6 +62,14 @@ class RunPaths:
         return self.dir / "troubleshooting.jsonl"
 
     @property
+    def download_script(self) -> Path:
+        return self.dir / "download.sh"
+
+    @property
+    def download_metadata(self) -> Path:
+        return self.dir / "download_metadata.json"
+
+    @property
     def design(self) -> Path:
         return self.dir / "design.csv"
 
