@@ -19,6 +19,7 @@ from pathlib import Path
 import anthropic
 
 from agents.submission.params import SubmissionParams
+from agents.submission.tools import run_command
 from core import config
 from core.session import SESSION
 
@@ -35,6 +36,13 @@ The user may want to discuss — ask questions, provide context about their envi
 or suggest alternatives. Respond helpfully and adapt your proposal as needed. When the
 user is satisfied, they'll approve your fix.
 
+## Diagnosing the environment
+
+You have a run_command tool to inspect the machine and environment. Use it to check
+things the log alone can't tell you — Docker memory limits, disk space, running
+processes, etc. For OOM kills (exit 137), always check `docker info` to see if
+Docker's memory limit is the bottleneck, not just system RAM.
+
 ## nf-core/rnaseq knowledge
 
 Common fixes for known failure modes:
@@ -43,6 +51,9 @@ Common fixes for known failure modes:
   pseudo-alignment without STAR/RSEM, drastically reducing memory. Alternatively,
   add `-resume` to reuse completed steps and set max memory:
   `--max_memory '30.GB'` (set below available RAM to leave headroom).
+- **Docker OOM (exit 137)**: the process was killed by Docker, not the OS. Check
+  Docker's memory allocation with `docker info | grep Memory`. The fix is a user
+  action: increase Docker Desktop's memory in Settings → Resources.
 - **Docker/Singularity not running**: user needs to start Docker Desktop or the
   Docker daemon.
 - **Container pull failure**: network issue or rate-limited. Retry, or use
@@ -63,6 +74,25 @@ When calling propose_fix, classify the fix as:
 
 If this is attempt 2+, previous fixes didn't work — try something different.
 """
+
+_RUN_COMMAND_TOOL = {
+    "name": "run_command",
+    "description": (
+        "Run a shell command on the machine and return stdout/stderr. "
+        "Use this to check Docker memory limits, disk space, running processes, "
+        "or anything else the log alone can't tell you."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "command": {
+                "type": "string",
+                "description": "The shell command to run.",
+            },
+        },
+        "required": ["command"],
+    },
+}
 
 _PROPOSE_FIX_TOOL = {
     "name": "propose_fix",
@@ -173,7 +203,7 @@ def diagnose_and_propose(
             model=config.MODEL_SONNET,
             max_tokens=2048,
             system=_SYSTEM_PROMPT,
-            tools=[_PROPOSE_FIX_TOOL],
+            tools=[_RUN_COMMAND_TOOL, _PROPOSE_FIX_TOOL],
             messages=messages,
         )
         messages.append({"role": "assistant", "content": response.content})
@@ -184,8 +214,20 @@ def diagnose_and_propose(
 
         if response.stop_reason == "tool_use":
             tool_results = []
+            has_proposal = False
             for block in response.content:
-                if block.type == "tool_use" and block.name == "propose_fix":
+                if block.type != "tool_use":
+                    continue
+                if block.name == "run_command":
+                    result = run_command(block.input["command"])
+                    print(f"\n🔧 run_command({block.input['command']})")
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": json.dumps(result),
+                    })
+                elif block.name == "propose_fix":
+                    has_proposal = True
                     proposal = block.input
                     _log_event({"event": "diagnosis", "attempt": attempt, "proposal": proposal})
                     _print_proposal(proposal)
@@ -195,7 +237,8 @@ def diagnose_and_propose(
                         "content": "Proposal shown to user. Waiting for their response.",
                     })
             messages.append({"role": "user", "content": tool_results})
-            continue
+            if not has_proposal:
+                continue
 
         try:
             if proposal:
