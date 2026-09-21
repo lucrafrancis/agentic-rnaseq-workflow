@@ -48,6 +48,18 @@ class Session:
         self.paths.dir.mkdir(parents=True, exist_ok=True)
         self.stages_completed = []
 
+    def resume_run(self, run_dir: Path) -> None:
+        """Attach to an existing run directory for resumption."""
+        run_dir = run_dir.resolve()
+        if not run_dir.is_dir():
+            raise FileNotFoundError(f"Run directory not found: {run_dir}")
+        from core.config import RUNS_DIR
+        if run_dir.parent != RUNS_DIR.resolve():
+            raise ValueError(f"Run directory must be under {RUNS_DIR}, got: {run_dir}")
+        self.name = run_dir.name
+        self.paths = RunPaths(self.name)
+        self.stages_completed = []
+
     def mark_stage_complete(self, stage: str) -> None:
         if stage not in self.stages_completed:
             self.stages_completed.append(stage)

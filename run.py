@@ -1,11 +1,15 @@
 """Entrypoint:
-  uv run python run.py <prompt.txt>         — full pipeline (stages 1-3)
-  uv run python run.py --analyze <results>  — analysis only (stage 3)
+  uv run python run.py <prompt.txt>           — full pipeline (stages 0-3)
+  uv run python run.py --resume <run_dir>     — resume from an existing run directory
+  uv run python run.py --analyze <results>    — analysis only (stage 3)
 
-Three stages with human approval between them:
+Stages with human approval between them:
+  0. Download agent — resolve accessions, download FASTQs (if needed)
   1. Samplesheet agent — scans FASTQs, builds sample sheet
   2. Submission handler — builds nextflow command, submits pipeline
   3. Analysis agent — downstream DE, enrichment, and reporting
+
+--resume skips stages whose artifacts already exist in the run directory.
 """
 
 from __future__ import annotations
@@ -31,8 +35,25 @@ def main() -> None:
         _run_analysis(str(results_dir))
         return
 
+    if len(sys.argv) == 3 and sys.argv[1] == "--resume":
+        run_dir = Path(sys.argv[2])
+        if not run_dir.is_dir():
+            sys.exit(f"Not a directory: {run_dir}")
+        SESSION.resume_run(run_dir)
+        prompt_file = run_dir / "prompt.txt"
+        if not prompt_file.is_file():
+            sys.exit(f"No prompt.txt in {run_dir}. Cannot resume.")
+        prompt = prompt_file.read_text().strip()
+        print(f"Resuming run: {run_dir}")
+        _run_pipeline(prompt)
+        return
+
     if len(sys.argv) != 2:
-        sys.exit("usage: python run.py <prompt.txt>\n       python run.py --analyze <results_dir>")
+        sys.exit(
+            "usage: python run.py <prompt.txt>\n"
+            "       python run.py --resume <run_dir>\n"
+            "       python run.py --analyze <results_dir>"
+        )
 
     prompt_file = Path(sys.argv[1])
     if not prompt_file.is_file():
@@ -46,55 +67,74 @@ def main() -> None:
     SESSION.begin_run(project_name)
     shutil.copy2(prompt_file, SESSION.paths.dir / "prompt.txt")
     print(f"Run directory: {SESSION.paths.dir}")
+    _run_pipeline(prompt)
+
+
+def _run_pipeline(prompt: str) -> None:
+    """Run the full pipeline, skipping stages whose artifacts already exist."""
+    paths = SESSION.require_paths()
 
     # --- Stage 0: data download (if accession present and no FASTQ path given) ---
     accession = _extract_accession(prompt)
     if accession and not _has_fastq_path(prompt):
-        _download_stage(prompt)
+        if paths.download_metadata.is_file():
+            print("Stage 0: download metadata exists, skipping download agent.")
+        else:
+            _download_stage(prompt)
 
     # --- Stage 1: samplesheet generation ---
-    from agents.samplesheet.loop import run_samplesheet_agent
-    run_samplesheet_agent(prompt)
-
-    paths = SESSION.require_paths()
     samplesheet = paths.samplesheet
-    report = paths.dir / "report.md"
+    if samplesheet.is_file():
+        print(f"Stage 1: samplesheet exists ({samplesheet}), skipping samplesheet agent.")
+    else:
+        from agents.samplesheet.loop import run_samplesheet_agent
+        run_samplesheet_agent(prompt)
 
-    if not samplesheet.is_file():
-        sys.exit("Samplesheet agent did not produce a sample sheet. Check the logs.")
+        if not samplesheet.is_file():
+            sys.exit("Samplesheet agent did not produce a sample sheet. Check the logs.")
 
-    preview = samplesheet.read_text()
-    if report.is_file():
-        print(f"\nReport: {report}")
+        report = paths.dir / "report.md"
+        if report.is_file():
+            print(f"\nReport: {report}")
 
-    result = present_for_approval(
-        title="Sample sheet",
-        preview=preview,
-        file_path=samplesheet,
-        summary_stats={"samples": preview.count("\n") - 1},
-    )
-
-    if not result.approved:
-        print(f"Sample sheet rejected. Reason: {result.reason or 'none given'}")
-        sys.exit(1)
-
-    if result.edited:
         preview = samplesheet.read_text()
-        print(f"Using edited sample sheet ({preview.count(chr(10)) - 1} samples).")
+        result = present_for_approval(
+            title="Sample sheet",
+            preview=preview,
+            file_path=samplesheet,
+            summary_stats={"samples": preview.count("\n") - 1},
+        )
+
+        if not result.approved:
+            print(f"Sample sheet rejected. Reason: {result.reason or 'none given'}")
+            sys.exit(1)
+
+        if result.edited:
+            preview = samplesheet.read_text()
+            print(f"Using edited sample sheet ({preview.count(chr(10)) - 1} samples).")
 
     # --- Stage 2: submission configuration + pipeline run ---
-    from agents.submission.loop import run_submission_agent
+    results_dir = paths.dir / "results"
+    if results_dir.is_dir() and any(results_dir.iterdir()):
+        print(f"Stage 2: results exist ({results_dir}), skipping submission.")
+        outcome = {"outdir": str(results_dir)}
+    else:
+        if not paths.params_file.is_file():
+            from agents.submission.loop import run_submission_agent
 
-    samplesheet_content = samplesheet.read_text()
-    n_samples = samplesheet_content.count("\n") - 1
-    submission_prompt = (
-        f"{prompt}\n\n"
-        f"Approved samplesheet ({n_samples} samples): {samplesheet}\n"
-        f"Preview:\n{samplesheet_content}"
-    )
-    print("\n--- Stage 2: Submission Configuration ---")
-    run_submission_agent(submission_prompt)
-    outcome = _submit_with_troubleshooting(str(samplesheet))
+            samplesheet_content = samplesheet.read_text()
+            n_samples = samplesheet_content.count("\n") - 1
+            submission_prompt = (
+                f"{prompt}\n\n"
+                f"Approved samplesheet ({n_samples} samples): {samplesheet}\n"
+                f"Preview:\n{samplesheet_content}"
+            )
+            print("\n--- Stage 2: Submission Configuration ---")
+            run_submission_agent(submission_prompt)
+        else:
+            print(f"Stage 2: params.json exists, skipping submission agent.")
+
+        outcome = _submit_with_troubleshooting(str(samplesheet))
 
     # --- Stage 3: downstream analysis ---
     _run_analysis(outcome["outdir"])
@@ -110,8 +150,6 @@ def _has_fastq_path(prompt: str) -> bool:
     """Check if the prompt already specifies a FASTQ directory."""
     lower = prompt.lower()
     return "fastq" in lower and ("/" in lower or "path" in lower or "dir" in lower)
-
-
 
 
 def _download_stage(prompt: str) -> None:

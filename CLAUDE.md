@@ -16,9 +16,12 @@ The full flow in `run.py`: download agent (if needed) → human approves downloa
 ## Running
 
 ```bash
-uv run python run.py <prompt.txt>         # full pipeline (stages 1-3)
-uv run python run.py --analyze <results>  # analysis only (stage 3)
+uv run python run.py <prompt.txt>                # full pipeline (stages 0-3)
+uv run python run.py --resume <run_dir>          # resume from existing run directory
+uv run python run.py --analyze <results>         # analysis only (stage 3)
 ```
+
+`--resume` skips stages whose artifacts already exist: `download_metadata.json` → skip download, `samplesheet.csv` → skip samplesheet agent, `params.json` → skip submission agent, `results/` non-empty → skip nextflow, go straight to analysis.
 
 The prompt file describes the data (FASTQ location, organism, metadata path, strandedness). See `examples/` for working prompts. Run directories are named `runs/<datestamp>_<project>/` (derived from prompt file's parent directory).
 
