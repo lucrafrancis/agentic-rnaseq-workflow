@@ -11,6 +11,7 @@ from pathlib import Path
 
 # --- LLM ---------------------------------------------------------------------
 MODEL = "claude-haiku-4-5-20251001"
+MODEL_STRONG = "claude-sonnet-5-20250514"
 MAX_TOKENS = 16384
 MAX_TURNS = 40
 

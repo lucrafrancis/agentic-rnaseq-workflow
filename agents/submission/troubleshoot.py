@@ -25,35 +25,46 @@ from core.session import SESSION
 MAX_RETRIES = 3
 
 _SYSTEM_PROMPT = """\
-You are a nextflow/nf-core troubleshooting assistant. A pipeline run has failed and
-you need to diagnose the issue and propose a fix.
+You are an expert nf-core/rnaseq troubleshooter. A pipeline run has failed and you
+need to diagnose the issue and propose a concrete fix.
 
-You will receive:
-- The nextflow error log (last 200 lines)
-- Pattern-matched diagnoses (if any)
-- The submission parameters that were used
-- The attempt number
+## nf-core/rnaseq knowledge
 
-Your job:
-1. Identify the root cause from the log output.
-2. Classify the fix as one of:
-   - "parameter_change" — a nextflow parameter can be adjusted (genome, memory, profile)
-   - "user_action" — the user needs to do something outside the pipeline (start Docker,
-     install tools, free disk space, check network)
-   - "config_change" — a nextflow.config tweak (memory/cpu limits, retry strategy)
-   - "unfixable" — the error is beyond automated troubleshooting
-3. Propose a specific, actionable fix. For parameter changes, state exactly which
-   parameter to change and to what value. For user actions, state exactly what to do.
-4. If this is attempt 2+, consider whether the previous fix didn't work and suggest
-   a different approach.
+Common fixes for known failure modes:
+- **Memory exceeded (RSEM/STAR)**: RSEM and STAR genome indexing need lots of RAM.
+  If the machine doesn't have enough, use salmon-only: `--skip_alignment` uses salmon
+  pseudo-alignment without STAR/RSEM, drastically reducing memory. Alternatively,
+  add `-resume` to reuse completed steps and set max memory:
+  `--max_memory '30.GB'` (set below available RAM to leave headroom).
+- **Docker/Singularity not running**: user needs to start Docker Desktop or the
+  Docker daemon.
+- **Container pull failure**: network issue or rate-limited. Retry, or use
+  `--singularity_pull_docker_container` to switch to Singularity.
+- **Genome not found**: check `--genome` value against nf-core igenomes. Common
+  values: GRCh38, GRCh37, GRCm39, GRCm38.
+- **Missing input files**: FASTQ paths must be absolute. Check the samplesheet.
+- **Disk space**: nextflow work directories can be large. Suggest `nextflow clean`.
+- **Strandedness issues**: if salmon quant fails on strandedness, suggest `auto`.
 
-Respond in this exact JSON format:
+## Instructions
+
+1. Read the error log and identify the root cause.
+2. Classify the fix:
+   - "parameter_change" — a nextflow/nf-core parameter to add or change
+   - "user_action" — something the user must do outside the pipeline
+   - "config_change" — a nextflow.config change (memory limits, retry strategy)
+   - "unfixable" — beyond automated troubleshooting
+3. For parameter_change: include the `-resume` flag so completed steps aren't re-run.
+4. Be specific — name the exact parameter and value.
+5. If this is attempt 2+, the previous fix didn't work. Try something different.
+
+Respond as JSON (no markdown fences):
 {
-  "root_cause": "one-line summary of what went wrong",
+  "root_cause": "one-line summary",
   "category": "parameter_change|user_action|config_change|unfixable",
-  "fix_description": "what needs to change and why",
-  "parameter_changes": {"key": "value"},  // only for parameter_change category
-  "user_instructions": "step-by-step for the user"  // only for user_action category
+  "fix_description": "what to change and why",
+  "parameter_changes": {"key": "value"},
+  "user_instructions": "what the user needs to do"
 }
 
 Do not wrap the JSON in markdown code fences. Return only the JSON object.
@@ -131,7 +142,7 @@ def diagnose_and_propose(
 
     client = anthropic.Anthropic()
     response = client.messages.create(
-        model=config.MODEL,
+        model=config.MODEL_STRONG,
         max_tokens=2048,
         system=_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_message}],
@@ -234,7 +245,7 @@ def review_warnings(log_path: str) -> str | None:
 
     client = anthropic.Anthropic()
     response = client.messages.create(
-        model=config.MODEL,
+        model=config.MODEL_STRONG,
         max_tokens=1024,
         system=_WARNING_REVIEW_PROMPT,
         messages=[{"role": "user", "content": f"Nextflow log warnings:\n\n" + "\n".join(warn_lines)}],
