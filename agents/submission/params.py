@@ -16,6 +16,9 @@ from typing import Any
 from core.config import NFCORE_PIPELINE, NFCORE_REVISION
 
 
+_NEXTFLOW_CONFIG_KEYS = {"max_memory", "max_cpus", "max_time"}
+
+
 @dataclass
 class SubmissionParams:
     """Parameters for an nf-core/rnaseq submission."""
@@ -27,6 +30,16 @@ class SubmissionParams:
     genome: str = "GRCh38"
     profile: str = "docker"
     extra_args: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def pipeline_params(self) -> dict[str, Any]:
+        """Params that belong in the YAML params file (nf-schema validated)."""
+        return {k: v for k, v in self.extra_args.items() if k not in _NEXTFLOW_CONFIG_KEYS}
+
+    @property
+    def config_params(self) -> dict[str, Any]:
+        """Params that belong in nextflow config (max_memory, max_cpus, max_time)."""
+        return {k: v for k, v in self.extra_args.items() if k in _NEXTFLOW_CONFIG_KEYS}
 
     def to_nextflow_args(self) -> list[str]:
         """Build the nextflow run command arguments."""
@@ -49,9 +62,9 @@ class SubmissionParams:
     def to_command_string(self) -> str:
         return " ".join(self.to_nextflow_args())
 
-    def to_script(self, params_file: str) -> str:
+    def to_script(self, params_file: str, config_file: str | None = None) -> str:
         """Generate a bash script that references a params YAML file."""
-        return "\n".join([
+        lines = [
             "#!/usr/bin/env bash",
             "set -euo pipefail",
             "",
@@ -60,9 +73,32 @@ class SubmissionParams:
             f"  --input {shlex.quote(self.input_samplesheet)} \\",
             f"  --outdir {shlex.quote(self.outdir)} \\",
             f"  -profile {self.profile} \\",
-            f"  -params-file {shlex.quote(params_file)}",
+        ]
+        if config_file:
+            lines.append(f"  -c {shlex.quote(config_file)} \\")
+        lines.append(f"  -params-file {shlex.quote(params_file)}")
+        lines.append("")
+        return "\n".join(lines)
+
+    def write_nf_config(self, path: Path) -> None:
+        """Write nextflow resource limits config (max_memory, max_cpus, max_time)."""
+        cfg = self.config_params
+        if not cfg:
+            return
+        key_map = {"max_memory": "memory", "max_cpus": "cpus", "max_time": "time"}
+        entries = []
+        for key, value in cfg.items():
+            nf_key = key_map.get(key, key)
+            entries.append(f"        {nf_key}: {value}")
+        lines = [
+            "process {",
+            "    resourceLimits = [",
+            ",\n".join(entries),
+            "    ]",
+            "}",
             "",
-        ])
+        ]
+        path.write_text("\n".join(lines))
 
     def write_nf_params(self, path: Path) -> None:
         """Write pipeline params (genome + extras) to a YAML file.
@@ -71,7 +107,7 @@ class SubmissionParams:
         won't reject them as strings.
         """
         params: dict[str, Any] = {"genome": self.genome}
-        params.update(self.extra_args)
+        params.update(self.pipeline_params)
         lines = []
         for key, value in params.items():
             if isinstance(value, bool):

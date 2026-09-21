@@ -67,11 +67,19 @@ def submit_and_monitor(params: SubmissionParams) -> dict:
     """
     paths = SESSION.require_paths()
     params.write_nf_params(paths.nf_params)
+
+    config_path = None
+    if params.config_params:
+        params.write_nf_config(paths.nf_config)
+        config_path = str(paths.nf_config)
+
     script_path = paths.nextflow_script
-    script_path.write_text(params.to_script(str(paths.nf_params)))
+    script_path.write_text(params.to_script(str(paths.nf_params), config_path))
     script_path.chmod(0o755)
 
     preview = script_path.read_text() + f"\n# {paths.nf_params}:\n" + paths.nf_params.read_text()
+    if config_path:
+        preview += f"\n# {paths.nf_config}:\n" + paths.nf_config.read_text()
     result = present_for_approval(
         title="nf-core/rnaseq submission",
         preview=preview,
@@ -94,12 +102,18 @@ def submit_and_monitor(params: SubmissionParams) -> dict:
         _HANG_TIMEOUT = 60
         pipeline_failed = False
 
+        _KILL_GRACE = 10
+
         def _watchdog():
             """Kill nextflow if it hangs after a detected failure."""
             time.sleep(_HANG_TIMEOUT)
             if proc.poll() is None:
                 print(f"\nNextflow hung for {_HANG_TIMEOUT}s after failure. Terminating...")
                 proc.terminate()
+                time.sleep(_KILL_GRACE)
+                if proc.poll() is None:
+                    print("Still alive — forcing kill.")
+                    proc.kill()
 
         with log_path.open("w") as log_file:
             for line in proc.stdout:

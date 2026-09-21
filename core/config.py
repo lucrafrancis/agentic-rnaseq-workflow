@@ -66,6 +66,10 @@ class RunPaths:
         return self.dir / "nf_params.yml"
 
     @property
+    def nf_config(self) -> Path:
+        return self.dir / "custom.config"
+
+    @property
     def troubleshooting_log(self) -> Path:
         return self.dir / "troubleshooting.jsonl"
 
