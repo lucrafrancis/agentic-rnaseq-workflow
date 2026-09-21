@@ -47,9 +47,9 @@ def main() -> None:
     shutil.copy2(prompt_file, SESSION.paths.dir / "prompt.txt")
     print(f"Run directory: {SESSION.paths.dir}")
 
-    # --- Stage 0: data download (if GEO/SRA accession in prompt) ---
+    # --- Stage 0: data download (if accession present and no FASTQ path given) ---
     accession = _extract_accession(prompt)
-    if accession:
+    if accession and not _has_fastq_path(prompt):
         _download_stage(prompt)
 
     # --- Stage 1: samplesheet generation ---
@@ -82,7 +82,18 @@ def main() -> None:
         preview = samplesheet.read_text()
         print(f"Using edited sample sheet ({preview.count(chr(10)) - 1} samples).")
 
-    # --- Stage 2: pipeline submission (with troubleshooting retry loop) ---
+    # --- Stage 2: submission configuration + pipeline run ---
+    from agents.submission.loop import run_submission_agent
+
+    samplesheet_content = samplesheet.read_text()
+    n_samples = samplesheet_content.count("\n") - 1
+    submission_prompt = (
+        f"{prompt}\n\n"
+        f"Approved samplesheet ({n_samples} samples): {samplesheet}\n"
+        f"Preview:\n{samplesheet_content}"
+    )
+    print("\n--- Stage 2: Submission Configuration ---")
+    run_submission_agent(submission_prompt)
     outcome = _submit_with_troubleshooting(str(samplesheet))
 
     # --- Stage 3: downstream analysis ---
@@ -93,6 +104,14 @@ def _extract_accession(prompt: str) -> str | None:
     """Extract a GEO/SRA accession from the prompt text."""
     m = re.search(r"\b(GSE\d+|SRP\d+|ERP\d+|DRP\d+|PRJNA\d+)\b", prompt, re.IGNORECASE)
     return m.group(1) if m else None
+
+
+def _has_fastq_path(prompt: str) -> bool:
+    """Check if the prompt already specifies a FASTQ directory."""
+    lower = prompt.lower()
+    return "fastq" in lower and ("/" in lower or "path" in lower or "dir" in lower)
+
+
 
 
 def _download_stage(prompt: str) -> None:
@@ -127,8 +146,8 @@ def _download_stage(prompt: str) -> None:
     )
 
     if not result.approved:
-        print(f"Download rejected: {result.reason or 'none given'}")
-        sys.exit(1)
+        print(f"Download skipped: {result.reason or 'none given'}")
+        return
 
     print("\nDownloading...")
     exec_result = execute_download(str(paths.download_script))
@@ -149,7 +168,8 @@ def _download_stage(prompt: str) -> None:
 
 def _submit_with_troubleshooting(samplesheet_path: str) -> dict:
     """Run Stage 2 with LLM-assisted troubleshooting on failure."""
-    from agents.submission.submit import build_submission, submit_and_monitor
+    from agents.submission.params import SubmissionParams
+    from agents.submission.submit import submit_and_monitor
     from agents.submission.troubleshoot import (
         MAX_RETRIES,
         apply_parameter_fix,
@@ -157,7 +177,12 @@ def _submit_with_troubleshooting(samplesheet_path: str) -> dict:
         wait_for_user_action,
     )
 
-    params = build_submission(samplesheet_path=samplesheet_path)
+    paths = SESSION.require_paths()
+    if paths.params_file.is_file():
+        params = SubmissionParams.load(paths.params_file)
+    else:
+        from agents.submission.submit import build_submission
+        params = build_submission(samplesheet_path=samplesheet_path)
     history: list[dict] = []
 
     for attempt in range(1, MAX_RETRIES + 1):

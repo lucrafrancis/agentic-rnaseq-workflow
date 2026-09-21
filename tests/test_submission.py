@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from agents.submission.errors import Diagnosis, diagnose_log, format_diagnoses
 from agents.submission.params import SubmissionParams, default_params
+from agents.submission.tools import configure_submission
 from core.session import SESSION
 
 
@@ -91,24 +93,107 @@ class TestDiagnoseLog:
         assert "Fix it" in out
 
 
-class TestSchemaConsistency:
-    def test_every_schema_has_a_callable_function(self):
-        from agents.samplesheet.schemas import TOOL_FUNCTIONS, TOOL_SCHEMAS
+class TestFromDict:
+    def test_round_trip(self):
+        params = SubmissionParams(
+            input_samplesheet="/sheet.csv",
+            outdir="/out",
+            genome="GRCm39",
+            profile="singularity",
+            extra_args={"skip_alignment": True, "max_memory": "30.GB"},
+        )
+        rebuilt = SubmissionParams.from_dict(params.to_dict())
+        assert rebuilt.genome == "GRCm39"
+        assert rebuilt.profile == "singularity"
+        assert rebuilt.extra_args["skip_alignment"] is True
+        assert rebuilt.extra_args["max_memory"] == "30.GB"
+        assert rebuilt.input_samplesheet == "/sheet.csv"
 
-        for schema in TOOL_SCHEMAS:
-            name = schema["name"]
-            assert name in TOOL_FUNCTIONS, f"{name} exposed to Claude but not dispatchable"
-            assert callable(TOOL_FUNCTIONS[name])
+    def test_load_from_file(self, tmp_path: Path):
+        data = {
+            "pipeline": "nf-core/rnaseq",
+            "revision": "3.26.0",
+            "input": "/sheet.csv",
+            "outdir": "/out",
+            "genome": "GRCh38",
+            "profile": "docker",
+            "skip_alignment": True,
+        }
+        f = tmp_path / "params.json"
+        f.write_text(json.dumps(data))
+        params = SubmissionParams.load(f)
+        assert params.extra_args["skip_alignment"] is True
+        assert params.genome == "GRCh38"
+
+
+class TestConfigureSubmission:
+    def test_basic(self, tmp_path: Path):
+        SESSION.begin_run("test_configure")
+        paths = SESSION.require_paths()
+        paths.samplesheet.write_text("sample,fastq_1,fastq_2,strandedness\n")
+
+        result = configure_submission(genome="GRCh38")
+        assert "command" in result
+        assert "GRCh38" in result["command"]
+        assert paths.params_file.is_file()
+
+        saved = json.loads(paths.params_file.read_text())
+        assert saved["genome"] == "GRCh38"
+
+    def test_extra_params(self, tmp_path: Path):
+        SESSION.begin_run("test_configure_extras")
+        paths = SESSION.require_paths()
+        paths.samplesheet.write_text("sample,fastq_1,fastq_2,strandedness\n")
+
+        result = configure_submission(
+            genome="GRCm39",
+            profile="singularity",
+            extra_params={"skip_alignment": True, "max_memory": "16.GB"},
+        )
+        assert result["genome"] == "GRCm39"
+        assert result["profile"] == "singularity"
+        assert result["extra_params"]["skip_alignment"] is True
+
+        saved = json.loads(paths.params_file.read_text())
+        assert saved["skip_alignment"] is True
+        assert saved["max_memory"] == "16.GB"
+
+    def test_coerces_string_booleans(self, tmp_path: Path):
+        SESSION.begin_run("test_configure_coerce")
+        SESSION.require_paths().samplesheet.write_text("sample,fastq_1,fastq_2,strandedness\n")
+
+        result = configure_submission(
+            genome="GRCh38",
+            extra_params={"skip_alignment": "true", "skip_trimming": "false"},
+        )
+        saved = json.loads(SESSION.require_paths().params_file.read_text())
+        assert saved["skip_alignment"] is True
+        assert saved["skip_trimming"] is False
+
+
+class TestSchemaConsistency:
+    """Check all agent schemas (samplesheet, download, submission)."""
+
+    def _all_schemas(self):
+        from agents.samplesheet.schemas import TOOL_FUNCTIONS as SS_FN, TOOL_SCHEMAS as SS_SC
+        from agents.download.schemas import TOOL_FUNCTIONS as DL_FN, TOOL_SCHEMAS as DL_SC
+        from agents.submission.schemas import TOOL_FUNCTIONS as SB_FN, TOOL_SCHEMAS as SB_SC
+        return [(SS_SC, SS_FN), (DL_SC, DL_FN), (SB_SC, SB_FN)]
+
+    def test_every_schema_has_a_callable_function(self):
+        for schemas, functions in self._all_schemas():
+            for schema in schemas:
+                name = schema["name"]
+                assert name in functions, f"{name} exposed to Claude but not dispatchable"
+                assert callable(functions[name])
 
     def test_schemas_are_well_formed(self):
-        from agents.samplesheet.schemas import TOOL_SCHEMAS
-
-        for schema in TOOL_SCHEMAS:
-            assert {"name", "description", "input_schema"} <= schema.keys()
-            assert schema["input_schema"]["type"] == "object"
+        for schemas, _ in self._all_schemas():
+            for schema in schemas:
+                assert {"name", "description", "input_schema"} <= schema.keys()
+                assert schema["input_schema"]["type"] == "object"
 
     def test_no_duplicate_tool_names(self):
-        from agents.samplesheet.schemas import TOOL_SCHEMAS
-
-        names = [s["name"] for s in TOOL_SCHEMAS]
-        assert len(names) == len(set(names))
+        for schemas, _ in self._all_schemas():
+            names = [s["name"] for s in schemas]
+            assert len(names) == len(set(names))

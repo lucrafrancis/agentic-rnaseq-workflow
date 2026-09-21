@@ -7,6 +7,7 @@ or output directory).
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -57,6 +58,26 @@ class SubmissionParams:
             "profile": self.profile,
             **self.extra_args,
         }
+
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "SubmissionParams":
+        """Reconstruct from a to_dict() round-trip (e.g. params.json)."""
+        _KNOWN = {"pipeline", "revision", "input", "outdir", "genome", "profile"}
+        return cls(
+            pipeline=data.get("pipeline", NFCORE_PIPELINE),
+            revision=data.get("revision", NFCORE_REVISION),
+            input_samplesheet=data.get("input", ""),
+            outdir=data.get("outdir", ""),
+            genome=data.get("genome", "GRCh38"),
+            profile=data.get("profile", "docker"),
+            extra_args={k: v for k, v in data.items() if k not in _KNOWN},
+        )
+
+    @classmethod
+    def load(cls, params_file: Path) -> "SubmissionParams":
+        """Load from a params.json file."""
+        return cls.from_dict(json.loads(params_file.read_text()))
 
 
 def default_params(samplesheet_path: str, outdir: str) -> SubmissionParams:
