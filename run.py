@@ -107,6 +107,15 @@ def _submit_with_troubleshooting(samplesheet_path: str) -> dict:
         if outcome.get("success"):
             print(f"\nPipeline finished successfully.")
             print(f"  Results: {outcome['outdir']}")
+
+            from agents.submission.troubleshoot import review_warnings
+            print("Checking for warnings...")
+            warnings = review_warnings(outcome.get("log_path", ""))
+            if warnings:
+                print(f"\n⚠ Pipeline warnings:\n{warnings}")
+            else:
+                print("No warnings.")
+
             return outcome
 
         print(f"\nPipeline failed (exit code {outcome.get('returncode')}).")

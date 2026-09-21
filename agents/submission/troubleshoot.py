@@ -1,9 +1,11 @@
-"""LLM-assisted troubleshooting for nextflow pipeline failures.
+"""LLM-assisted troubleshooting and post-run warning review.
 
-When nextflow exits non-zero, this module feeds the error log and diagnosed patterns
-to the LLM, which proposes a fix. The user approves before anything changes. All
-proposals and outcomes are logged to troubleshooting.jsonl for auditability.
+Two modes:
+  - Failure: feeds the error log to the LLM, which proposes a fix. User approves
+    before anything changes.
+  - Success: scans the log for warnings and produces a concise summary.
 
+All events are logged to troubleshooting.jsonl for auditability.
 The LLM is only active during diagnosis — no tokens are burned while the pipeline runs.
 """
 
@@ -178,3 +180,47 @@ def wait_for_user_action(proposal: dict) -> bool:
     except EOFError:
         return False
     return raw != "q"
+
+
+_WARNING_REVIEW_PROMPT = """\
+You are reviewing the nextflow log from a successful nf-core/rnaseq run. Extract any
+WARN lines or notable issues the user should be aware of. Ignore routine informational
+messages.
+
+For each warning, provide:
+- What it means in plain language
+- Whether it affects downstream analysis
+- What the user could do about it (if anything)
+
+Be concise — one or two sentences per warning. If there are no warnings worth
+flagging, respond with exactly: "No warnings to report."
+"""
+
+
+def review_warnings(log_path: str) -> str | None:
+    """Scan a successful run's log for warnings and return a concise LLM summary.
+
+    Returns the summary string, or None if there are no warnings.
+    """
+    log_tail = _get_log_tail(log_path, n_lines=500)
+    if "(log file not found)" in log_tail:
+        return None
+
+    warn_lines = [line for line in log_tail.splitlines() if "WARN" in line]
+    if not warn_lines:
+        return None
+
+    client = anthropic.Anthropic()
+    response = client.messages.create(
+        model=config.MODEL,
+        max_tokens=1024,
+        system=_WARNING_REVIEW_PROMPT,
+        messages=[{"role": "user", "content": f"Nextflow log warnings:\n\n" + "\n".join(warn_lines)}],
+    )
+
+    summary = response.content[0].text.strip()
+    _log_event({"event": "warning_review", "n_warnings": len(warn_lines), "summary": summary})
+
+    if summary == "No warnings to report.":
+        return None
+    return summary
