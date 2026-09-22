@@ -66,10 +66,6 @@ The prompt file describes the data (FASTQ location, organism, metadata path, str
 - On success: LLM scans log for WARN lines and produces a concise summary of anything affecting downstream analysis.
 - Samplesheet agent cites GEO/SRA URLs when assigning conditions, with instructions on where to verify.
 
-## Known issues
-
-- **Resume logic for partial results** — `run.py:120` checks `results_dir.is_dir() and any(results_dir.iterdir())`, which treats QC-only output (no count matrices) as a complete run. Needs a smarter check for quantification output specifically.
-
 ## Test datasets
 
 - `examples/GSE245856/` — VPA treatment in HEK293T cells, 6 samples (3 CTRL, 3 VPA). `design.csv` and `prompt.txt` are in git; `counts.csv` (47k genes) is gitignored and must be generated locally. Used for analysis agent testing.

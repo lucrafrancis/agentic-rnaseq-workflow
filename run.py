@@ -112,7 +112,7 @@ def _run_pipeline(prompt: str) -> None:
             title="Sample sheet",
             preview=preview,
             file_path=samplesheet,
-            summary_stats={"samples": preview.count("\n") - 1},
+            summary_stats={"samples": len(preview.strip().splitlines()) - 1},
         )
 
         if not result.approved:
@@ -121,13 +121,20 @@ def _run_pipeline(prompt: str) -> None:
 
         if result.edited:
             preview = samplesheet.read_text()
-            print(f"Using edited sample sheet ({preview.count(chr(10)) - 1} samples).")
+            print(f"Using edited sample sheet ({len(preview.strip().splitlines()) - 1} samples).")
 
     SESSION.mark_stage_complete("samplesheet")
 
     # --- Stage 2: submission configuration + pipeline run ---
     results_dir = paths.dir / "results"
-    if results_dir.is_dir() and any(results_dir.iterdir()):
+    quant_complete = False
+    if results_dir.is_dir():
+        for subdir in ("star_salmon", "salmon"):
+            quant_path = results_dir / subdir / "salmon.merged.gene_counts.tsv"
+            if quant_path.is_file():
+                quant_complete = True
+                break
+    if quant_complete:
         print(f"Stage 2: results exist ({results_dir}), skipping submission.")
         outcome = {"outdir": str(results_dir)}
     else:

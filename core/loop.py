@@ -86,6 +86,8 @@ def run_agent_loop(
                 "content": json.dumps(summary),
             })
         messages.append({"role": "user", "content": tool_results})
+    else:
+        print(f"\n⚠️  Agent used all {config.MAX_TURNS} turns without finishing.")
 
     return messages
 

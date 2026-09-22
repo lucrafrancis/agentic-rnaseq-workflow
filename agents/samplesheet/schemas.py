@@ -166,7 +166,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
     {
         "name": "save_samplesheet",
-        "description": "Write the validated sample sheet CSV to disk. Call this after "
+        "description": "Write the validated sample sheet CSV to the run directory. Call this after "
         "validate_samplesheet confirms no errors, then call write_report.",
         "input_schema": {
             "type": "object",
@@ -175,12 +175,8 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "type": "string",
                     "description": "The validated sample sheet CSV content.",
                 },
-                "output_path": {
-                    "type": "string",
-                    "description": "Where to write the CSV file.",
-                },
             },
-            "required": ["csv_content", "output_path"],
+            "required": ["csv_content"],
         },
     },
     {

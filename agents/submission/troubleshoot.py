@@ -192,11 +192,16 @@ def _log_event(event: dict) -> None:
         f.write(json.dumps(event) + "\n")
 
 
+_MAX_LOG_BYTES = 512 * 1024
+
 def _read_log(log_path: str) -> str:
     path = Path(log_path)
     if not path.is_file():
         return "(log file not found)"
-    return path.read_text()
+    content = path.read_text()
+    if len(content) > _MAX_LOG_BYTES:
+        return content[:_MAX_LOG_BYTES // 2] + "\n\n... [truncated] ...\n\n" + content[-_MAX_LOG_BYTES // 2:]
+    return content
 
 
 def _print_proposal(proposal: dict) -> None:
@@ -252,7 +257,8 @@ def diagnose_and_propose(
     print(f"  Troubleshooting — attempt {attempt}/{MAX_RETRIES}")
     print(f"{'='*60}")
 
-    while True:
+    _MAX_DIAGNOSTIC_TURNS = 20
+    for _diag_turn in range(_MAX_DIAGNOSTIC_TURNS):
         response = client.messages.create(
             model=config.MODEL_SONNET,
             max_tokens=2048,
@@ -311,6 +317,9 @@ def diagnose_and_propose(
 
         messages.append({"role": "user", "content": raw})
         proposal = None
+    else:
+        print(f"\n⚠️  Diagnostic conversation hit {_MAX_DIAGNOSTIC_TURNS} turns without resolution.")
+        return None
 
 
 def apply_parameter_fix(params: SubmissionParams, changes: dict) -> None:

@@ -49,15 +49,26 @@ def read_file(filepath: str, max_lines: int = 50) -> Summary:
         return {"error": "not_a_file", "message": f"'{filepath}' does not exist."}
 
     try:
-        all_lines = path.read_text().splitlines()
+        lines = []
+        with path.open() as f:
+            for i, line in enumerate(f):
+                if i >= max_lines:
+                    break
+                lines.append(line.rstrip("\n"))
+        truncated = False
+        with path.open() as f:
+            for i, _ in enumerate(f):
+                if i >= max_lines:
+                    truncated = True
+                    break
     except UnicodeDecodeError:
         return {"error": "binary_file", "message": f"'{filepath}' is not a text file."}
 
     return {
         "filepath": str(path),
-        "n_lines": min(len(all_lines), max_lines),
-        "truncated": len(all_lines) > max_lines,
-        "content": "\n".join(all_lines[:max_lines]),
+        "n_lines": len(lines),
+        "truncated": truncated,
+        "content": "\n".join(lines),
     }
 
 
@@ -142,11 +153,12 @@ def match_pairs(fastq_list: list[str]) -> Summary:
     matched = []
     incomplete = []
     for prefix, reads in sorted(pairs.items()):
-        sample = reads.pop("sample")
-        if "fastq_1" in reads and "fastq_2" in reads:
-            matched.append({"sample": sample, **reads})
+        sample = reads.get("sample", prefix)
+        fq_reads = {k: v for k, v in reads.items() if k != "sample"}
+        if "fastq_1" in fq_reads and "fastq_2" in fq_reads:
+            matched.append({"sample": sample, **fq_reads})
         else:
-            incomplete.append({"sample": sample, **reads})
+            incomplete.append({"sample": sample, **fq_reads})
 
     return {
         "n_matched_pairs": len(matched),
@@ -186,13 +198,16 @@ def draft_samplesheet(matches: list[dict], metadata: dict | None = None) -> Summ
             "strandedness": strandedness,
         })
 
-    header = "sample,fastq_1,fastq_2,strandedness"
-    lines = [header]
+    import io
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["sample", "fastq_1", "fastq_2", "strandedness"])
     for row in rows:
-        lines.append(f"{row['sample']},{row['fastq_1']},{row['fastq_2']},{row['strandedness']}")
-    csv_content = "\n".join(lines) + "\n"
+        writer.writerow([row["sample"], row["fastq_1"], row["fastq_2"], row["strandedness"]])
+    csv_content = output.getvalue()
 
-    preview_lines = lines[:11]  # header + first 10 data rows
+    csv_lines = csv_content.splitlines()
+    preview_lines = csv_lines[:11]  # header + first 10 data rows
 
     return {
         "n_samples": len(rows),
@@ -328,12 +343,15 @@ def save_design(rows: list[dict]) -> Summary:
         if "condition" not in row:
             return {"error": "missing_condition", "message": f"Row {i}: missing 'condition' key."}
 
+    import io
     paths = SESSION.require_paths()
     columns = list(rows[0].keys())
-    lines = [",".join(columns)]
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(columns)
     for row in rows:
-        lines.append(",".join(str(row.get(c, "")) for c in columns))
-    paths.design.write_text("\n".join(lines) + "\n")
+        writer.writerow([str(row.get(c, "")) for c in columns])
+    paths.design.write_text(output.getvalue())
 
     conditions = sorted(set(row["condition"] for row in rows))
     return {

@@ -403,16 +403,15 @@ class TestGenerateReport:
         result = generate_report(md)
         content = Path(result["report_path"]).read_text()
         assert "![PCA](figures/pca.png)" in content
-        assert "## Figures" not in content
         assert "Disclaimer" in content
         assert "hallucination" in content.lower()
 
-    def test_returns_figure_paths(self, count_matrix_tsv: Path, design_csv: Path):
+    def test_returns_figures(self, count_matrix_tsv: Path, design_csv: Path):
         SESSION.begin_run("test")
         load_counts(str(count_matrix_tsv), design_path=str(design_csv))
         result = generate_report("# Report")
-        assert "figure_paths" in result
-        assert result["figure_paths"] == result["figures"]
+        assert "figures" in result
+        assert isinstance(result["figures"], dict)
 
 
 class TestScanResultsLooseFiles:
@@ -535,7 +534,7 @@ class TestInspectCounts:
         json.dumps(result)
 
 
-
+class TestSchemas:
     def test_every_schema_has_a_callable(self):
         from agents.analysis.schemas import TOOL_FUNCTIONS, TOOL_SCHEMAS
         for schema in TOOL_SCHEMAS:

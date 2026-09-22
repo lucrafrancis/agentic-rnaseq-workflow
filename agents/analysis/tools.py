@@ -202,8 +202,8 @@ def scan_results(results_dir: str) -> Summary:
             if not p.is_file():
                 continue
             stem_lower = p.stem.lower()
-            suffixes = "".join(p.suffixes).lower()
-            if suffixes not in _TABULAR_EXTENSIONS:
+            ext = p.suffix.lower()
+            if ext not in _TABULAR_EXTENSIONS:
                 continue
             if any(kw in stem_lower for kw in _COUNT_KEYWORDS):
                 candidates.append(p)
@@ -220,8 +220,7 @@ def scan_results(results_dir: str) -> Summary:
             if not p.is_file():
                 continue
             stem_lower = p.stem.lower()
-            suffixes = "".join(p.suffixes).lower()
-            if suffixes in _TABULAR_EXTENSIONS and any(kw in stem_lower for kw in _DESIGN_KEYWORDS):
+            if p.suffix.lower() in _TABULAR_EXTENSIONS and any(kw in stem_lower for kw in _DESIGN_KEYWORDS):
                 design_path = p
                 break
         if design_path:
@@ -234,7 +233,7 @@ def scan_results(results_dir: str) -> Summary:
     # --- List all tabular files for the agent to inspect if needed ---
     tabular_files = []
     for p in sorted(rdir.iterdir()):
-        if p.is_file() and "".join(p.suffixes).lower() in _TABULAR_EXTENSIONS:
+        if p.is_file() and p.suffix.lower() in _TABULAR_EXTENSIONS:
             tabular_files.append(p.name)
 
     SESSION.results_dir = rdir
@@ -259,7 +258,8 @@ _FEATURECOUNTS_META = {"Geneid", "Chr", "Start", "End", "Strand", "Length"}
 
 def _detect_separator(path: Path) -> str:
     """Guess CSV vs TSV from the first line."""
-    first_line = path.open().readline()
+    with path.open() as f:
+        first_line = f.readline()
     if "\t" in first_line:
         return "\t"
     return ","
@@ -463,6 +463,10 @@ def set_design(rows: list[dict]) -> Summary:
             "error": "samples_missing_from_design",
             "message": f"Samples in counts but not in design: {sorted(missing)}",
         }
+
+    extra = design_samples - count_samples
+    if extra:
+        design = design.loc[design.index.isin(count_samples)]
 
     SESSION.design_df = design
 
@@ -885,8 +889,9 @@ def generate_report(report_markdown: str) -> Summary:
         fig, ax = plt.subplots(figsize=(max(6, len(samples) * 0.8), 5))
         colors = [_NS_COLOR] * len(samples)
         if SESSION.design_df is not None:
-            cmap = _condition_colors(SESSION.design_df.loc[samples, "condition"])
-            colors = [cmap[SESSION.design_df.loc[s, "condition"]] for s in samples]
+            design_samples = [s for s in samples if s in SESSION.design_df.index]
+            cmap = _condition_colors(SESSION.design_df.loc[design_samples, "condition"])
+            colors = [cmap.get(SESSION.design_df.loc[s, "condition"], _NS_COLOR) if s in SESSION.design_df.index else _NS_COLOR for s in samples]
         bars = ax.bar(range(len(samples)), [s / 1e6 for s in lib_sizes], color=colors, edgecolor="white", linewidth=0.5)
         ax.set_xticks(range(len(samples)))
         ax.set_xticklabels(samples, rotation=45, ha="right", fontsize=9)
@@ -1075,10 +1080,11 @@ def generate_report(report_markdown: str) -> Summary:
                 else:
                     gene_labels.append(str(gid))
 
-            fig, ax = plt.subplots(figsize=(max(5, len(samples) * 0.7), max(6, n_top * 0.25)))
+            heatmap_samples = list(counts_top.columns)
+            fig, ax = plt.subplots(figsize=(max(5, len(heatmap_samples) * 0.7), max(6, n_top * 0.25)))
             im = ax.imshow(z_scores, aspect="auto", cmap="RdBu_r", vmin=-2.5, vmax=2.5)
-            ax.set_xticks(range(len(samples)))
-            ax.set_xticklabels(samples, rotation=45, ha="right", fontsize=9)
+            ax.set_xticks(range(len(heatmap_samples)))
+            ax.set_xticklabels(heatmap_samples, rotation=45, ha="right", fontsize=9)
             ax.set_yticks(range(n_top))
             ax.set_yticklabels(gene_labels, fontsize=7)
             plt.colorbar(im, ax=ax, label="z-score", shrink=0.6)
@@ -1139,6 +1145,5 @@ def generate_report(report_markdown: str) -> Summary:
     return {
         "report_path": str(paths.analysis_report),
         "figures": figure_map,
-        "figure_paths": {name: path for name, path in figure_map.items()},
         "n_figures": len(figures),
     }

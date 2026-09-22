@@ -125,5 +125,5 @@ def configure_submission(
         "params_file": str(paths.params_file),
         "genome": genome,
         "profile": profile,
-        "extra_params": extra_params or {},
+        "extra_params": clean,
     }

@@ -15,9 +15,6 @@ MODEL_SONNET = "claude-sonnet-4-5-20250929"
 MAX_TOKENS = 16384
 MAX_TURNS = 40
 
-# --- Reproducibility ---------------------------------------------------------
-SEED = 0
-
 # --- Paths -------------------------------------------------------------------
 ROOT = Path(__file__).resolve().parent.parent
 RUNS_DIR = ROOT / "runs"
