@@ -30,97 +30,210 @@ def _quantile_summary(values) -> dict[str, float]:
     return {name: round(float(np.quantile(arr, q)), 4) for name, q in _QUANTILES.items()}
 
 
-def scan_results(results_dir: str) -> Summary:
-    """Discover nf-core/rnaseq outputs: count matrices, TPM, MultiQC data.
+_COUNT_KEYWORDS = {"count", "counts", "gene_counts", "raw_counts", "featurecounts"}
+_DESIGN_KEYWORDS = {"design", "metadata", "coldata", "sample_info", "conditions", "phenotype"}
+_TABULAR_EXTENSIONS = {".csv", ".tsv", ".txt"}
 
-    Non-mutating; the agent calls this first to orient itself. Also checks the parent
-    run directory for a design.csv from the samplesheet agent.
+
+def scan_results(results_dir: str) -> Summary:
+    """Scan a directory for analysis inputs: count matrices, design files, MultiQC.
+
+    Detects both nf-core/rnaseq output structure and loose user-provided files.
+    Non-mutating; the agent calls this first to orient itself.
     """
     rdir = Path(results_dir)
     if not rdir.is_dir():
         return {"error": "not_a_directory", "message": f"'{results_dir}' is not a directory."}
 
-    # nf-core uses star_salmon/ by default; also check salmon/ for salmon-only runs
+    counts_path = None
+    tpm_path = None
+    mqc_path = None
+    design_path = None
+    source = "unknown"
+
+    # --- Try nf-core structure first ---
     star_salmon = rdir / "star_salmon"
     salmon_dir = star_salmon if star_salmon.is_dir() else rdir / "salmon"
 
-    counts_path = salmon_dir / "salmon.merged.gene_counts.tsv" if salmon_dir.is_dir() else None
-    tpm_path = salmon_dir / "salmon.merged.gene_tpm.tsv" if salmon_dir.is_dir() else None
+    if salmon_dir.is_dir():
+        nf_counts = salmon_dir / "salmon.merged.gene_counts.tsv"
+        nf_tpm = salmon_dir / "salmon.merged.gene_tpm.tsv"
+        if nf_counts.is_file():
+            counts_path = nf_counts
+            source = "nf-core"
+        if nf_tpm.is_file():
+            tpm_path = nf_tpm
 
-    counts_found = counts_path is not None and counts_path.is_file()
-    tpm_found = tpm_path is not None and tpm_path.is_file()
+        for mqc_subdir in ("star_salmon", "salmon"):
+            candidate = rdir / "multiqc" / mqc_subdir / "multiqc_report_data" / "multiqc_general_stats.txt"
+            if candidate.is_file():
+                mqc_path = candidate
+                break
 
-    # MultiQC: look for the general stats file
-    mqc_path = None
-    for mqc_subdir in ("star_salmon", "salmon"):
-        candidate = rdir / "multiqc" / mqc_subdir / "multiqc_report_data" / "multiqc_general_stats.txt"
-        if candidate.is_file():
-            mqc_path = candidate
+    # --- Fall back to scanning for loose tabular files ---
+    if counts_path is None:
+        candidates = []
+        for p in sorted(rdir.iterdir()):
+            if not p.is_file():
+                continue
+            stem_lower = p.stem.lower()
+            suffixes = "".join(p.suffixes).lower()
+            if suffixes not in _TABULAR_EXTENSIONS:
+                continue
+            if any(kw in stem_lower for kw in _COUNT_KEYWORDS):
+                candidates.append(p)
+        if len(candidates) == 1:
+            counts_path = candidates[0]
+            source = "user-provided"
+        elif len(candidates) > 1:
+            counts_path = candidates[0]
+            source = "user-provided"
+
+    # --- Look for design files ---
+    for search_dir in (rdir, rdir.parent):
+        for p in sorted(search_dir.iterdir()):
+            if not p.is_file():
+                continue
+            stem_lower = p.stem.lower()
+            suffixes = "".join(p.suffixes).lower()
+            if suffixes in _TABULAR_EXTENSIONS and any(kw in stem_lower for kw in _DESIGN_KEYWORDS):
+                design_path = p
+                break
+        if design_path:
             break
+    if design_path is None:
+        candidate = rdir.parent / "design.csv"
+        if candidate.is_file():
+            design_path = candidate
 
-    # Check parent directory for design.csv (from samplesheet agent)
-    design_path = rdir.parent / "design.csv"
-    design_found = design_path.is_file()
+    # --- List all tabular files for the agent to inspect if needed ---
+    tabular_files = []
+    for p in sorted(rdir.iterdir()):
+        if p.is_file() and "".join(p.suffixes).lower() in _TABULAR_EXTENSIONS:
+            tabular_files.append(p.name)
 
     SESSION.results_dir = rdir
 
     return {
         "results_dir": str(rdir),
-        "counts_found": counts_found,
-        "counts_path": str(counts_path) if counts_found else None,
-        "tpm_found": tpm_found,
-        "tpm_path": str(tpm_path) if tpm_found else None,
+        "source": source,
+        "counts_found": counts_path is not None,
+        "counts_path": str(counts_path) if counts_path else None,
+        "tpm_found": tpm_path is not None,
+        "tpm_path": str(tpm_path) if tpm_path else None,
         "multiqc_found": mqc_path is not None,
         "multiqc_path": str(mqc_path) if mqc_path else None,
-        "design_found": design_found,
-        "design_path": str(design_path) if design_found else None,
+        "design_found": design_path is not None,
+        "design_path": str(design_path) if design_path else None,
+        "tabular_files": tabular_files,
     }
 
 
-def load_counts(counts_path: str, design_path: str | None = None) -> Summary:
-    """Load the gene count matrix and optional design CSV.
+_FEATURECOUNTS_META = {"Geneid", "Chr", "Start", "End", "Strand", "Length"}
 
-    The nf-core count matrix has columns: gene_id, gene_name, then one column per
-    sample with integer counts. Sets gene_id as index, stores gene_name separately.
+
+def _detect_separator(path: Path) -> str:
+    """Guess CSV vs TSV from the first line."""
+    first_line = path.open().readline()
+    if "\t" in first_line:
+        return "\t"
+    return ","
+
+
+def _load_design(design_path: str) -> tuple[pd.DataFrame | None, str | None]:
+    """Load a design CSV/TSV. Returns (design_df, error_message)."""
+    dp = Path(design_path)
+    if not dp.is_file():
+        return None, f"Design file '{design_path}' does not exist."
+    sep = _detect_separator(dp)
+    design = pd.read_csv(dp, sep=sep)
+    if "sample" not in design.columns or "condition" not in design.columns:
+        return None, "Design file must have 'sample' and 'condition' columns."
+    design = design.set_index("sample")
+    return design, None
+
+
+def load_counts(counts_path: str, design_path: str | None = None) -> Summary:
+    """Load a gene count matrix and optional design file.
+
+    Handles multiple formats:
+    - nf-core/rnaseq: TSV with gene_id, gene_name, then sample columns
+    - featureCounts: TSV with Geneid, Chr, Start, End, Strand, Length, then samples
+    - Generic CSV/TSV: first column as gene index, remaining as samples
+    Auto-detects separator (tab vs comma).
     """
     path = Path(counts_path)
     if not path.is_file():
         return {"error": "not_a_file", "message": f"'{counts_path}' does not exist."}
 
-    df = pd.read_csv(path, sep="\t")
-    if "gene_id" not in df.columns:
-        return {"error": "bad_format", "message": "Count matrix missing 'gene_id' column."}
+    sep = _detect_separator(path)
+    df = pd.read_csv(path, sep=sep)
 
-    gene_names = df["gene_name"] if "gene_name" in df.columns else None
-    meta_cols = {"gene_id", "gene_name"} & set(df.columns)
-    counts = df.drop(columns=list(meta_cols)).set_index(df["gene_id"])
-    counts = counts.astype(int)
+    if df.shape[1] < 2:
+        return {"error": "bad_format", "message": "Count matrix has fewer than 2 columns."}
+
+    # Identify format and extract the count matrix
+    gene_names = None
+    gene_id_col = None
+
+    if "gene_id" in df.columns:
+        # nf-core format
+        gene_id_col = "gene_id"
+        if "gene_name" in df.columns:
+            gene_names = df["gene_name"]
+        meta_cols = {"gene_id", "gene_name"} & set(df.columns)
+
+    elif "Geneid" in df.columns:
+        # featureCounts format
+        gene_id_col = "Geneid"
+        meta_cols = _FEATURECOUNTS_META & set(df.columns)
+
+    else:
+        # Generic: first column is gene IDs, rest are samples
+        gene_id_col = df.columns[0]
+        meta_cols = {gene_id_col}
+
+    gene_ids = df[gene_id_col]
+    counts = df.drop(columns=list(meta_cols))
+
+    # Check that remaining columns look numeric
+    non_numeric = [c for c in counts.columns if not pd.api.types.is_numeric_dtype(counts[c])]
+    if non_numeric:
+        return {
+            "error": "non_numeric_columns",
+            "message": f"Columns {non_numeric[:5]} are not numeric. Check the file format — "
+            "the count matrix should have gene IDs in one column and numeric values in the rest.",
+        }
+
+    counts = counts.set_index(gene_ids)
 
     SESSION.counts_df = counts
-    SESSION.gene_names = gene_names.set_axis(df["gene_id"]) if gene_names is not None else None
+    SESSION.gene_names = gene_names.set_axis(gene_ids) if gene_names is not None else None
 
-    # Load TPM if available (same directory, known filename)
-    tpm_path = path.parent / "salmon.merged.gene_tpm.tsv"
-    if tpm_path.is_file():
-        tpm_df = pd.read_csv(tpm_path, sep="\t")
-        tpm = tpm_df.drop(columns=list(meta_cols & set(tpm_df.columns))).set_index(tpm_df["gene_id"])
+    # Load TPM if available (nf-core convention: same directory)
+    nf_tpm = path.parent / "salmon.merged.gene_tpm.tsv"
+    if nf_tpm.is_file():
+        tpm_df = pd.read_csv(nf_tpm, sep="\t")
+        tpm_meta = {"gene_id", "gene_name"} & set(tpm_df.columns)
+        tpm_id_col = "gene_id" if "gene_id" in tpm_df.columns else tpm_df.columns[0]
+        tpm = tpm_df.drop(columns=list(tpm_meta)).set_index(tpm_df[tpm_id_col])
         SESSION.tpm_df = tpm
 
     samples = list(counts.columns)
-    lib_sizes = {s: int(counts[s].sum()) for s in samples}
+    lib_sizes = {s: round(float(counts[s].sum()), 2) for s in samples}
 
     # Load design if provided
     conditions = None
     if design_path:
-        dp = Path(design_path)
-        if not dp.is_file():
-            return {"error": "design_not_found", "message": f"Design file '{design_path}' does not exist."}
-        design = pd.read_csv(dp)
-        if "sample" not in design.columns or "condition" not in design.columns:
-            return {"error": "bad_design", "message": "Design CSV must have 'sample' and 'condition' columns."}
-        design = design.set_index("sample")
+        design, err = _load_design(design_path)
+        if err:
+            return {"error": "bad_design", "message": err}
         SESSION.design_df = design
         conditions = sorted(design["condition"].unique().tolist())
+
+    detected_format = "nf-core" if "gene_id" in df.columns else (
+        "featureCounts" if "Geneid" in df.columns else "generic"
+    )
 
     return {
         "n_genes": int(counts.shape[0]),
@@ -131,6 +244,61 @@ def load_counts(counts_path: str, design_path: str | None = None) -> Summary:
         "tpm_loaded": SESSION.tpm_df is not None,
         "design_loaded": SESSION.design_df is not None,
         "conditions": conditions,
+        "detected_format": detected_format,
+    }
+
+
+def inspect_counts() -> Summary:
+    """Summarise the loaded count matrix so the agent can assess normalisation status.
+
+    Returns per-sample and global statistics: value range, fraction of non-integer
+    values, fraction of zeros, and distribution quantiles. These let the agent
+    determine whether the data is raw counts, TPM/FPKM, or log-transformed.
+    """
+    if SESSION.counts_df is None:
+        return {"error": "counts_not_loaded", "message": "Call load_counts before inspect_counts."}
+
+    counts = SESSION.counts_df
+    values = counts.values.ravel()
+    n_values = values.size
+    n_zero = int((values == 0).sum())
+    n_non_integer = int(np.sum(values != np.floor(values)))
+
+    global_stats = {
+        "min": round(float(np.nanmin(values)), 4),
+        "max": round(float(np.nanmax(values)), 4),
+        "mean": round(float(np.nanmean(values)), 4),
+        "median": round(float(np.nanmedian(values)), 4),
+        "fraction_zero": round(n_zero / n_values, 4) if n_values else 0,
+        "fraction_non_integer": round(n_non_integer / n_values, 4) if n_values else 0,
+        "n_genes": int(counts.shape[0]),
+        "n_samples": int(counts.shape[1]),
+    }
+
+    per_sample = {}
+    for col in counts.columns:
+        col_vals = counts[col].values
+        per_sample[col] = {
+            "mean": round(float(np.nanmean(col_vals)), 2),
+            "median": round(float(np.nanmedian(col_vals)), 2),
+            "max": round(float(np.nanmax(col_vals)), 2),
+            "fraction_zero": round(float((col_vals == 0).sum() / len(col_vals)), 4),
+        }
+
+    hints = []
+    if global_stats["fraction_non_integer"] < 0.01 and global_stats["max"] > 100:
+        hints.append("Values are almost entirely integers with a wide range — likely raw counts.")
+    elif global_stats["fraction_non_integer"] > 0.5 and global_stats["max"] < 25:
+        hints.append("Mostly non-integer values in a narrow range — likely log-transformed. "
+                      "DESeq2 requires raw counts; do not run it on this data.")
+    elif global_stats["fraction_non_integer"] > 0.5 and global_stats["max"] > 100:
+        hints.append("Non-integer values with a wide range — likely TPM/FPKM normalised. "
+                      "DESeq2 requires raw counts; do not run it on this data.")
+
+    return {
+        "global": global_stats,
+        "per_sample": per_sample,
+        "hints": hints,
     }
 
 

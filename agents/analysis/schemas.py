@@ -14,15 +14,15 @@ from agents.analysis import tools
 TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "name": "scan_results",
-        "description": "Scan an nf-core/rnaseq output directory for count matrices, "
-        "TPM values, and MultiQC data. Call this first to discover what the pipeline "
-        "produced. Also checks for a design.csv from the samplesheet agent.",
+        "description": "Scan a directory for analysis inputs: count matrices, design files, "
+        "and MultiQC data. Detects both nf-core/rnaseq output structure and loose "
+        "user-provided files. Lists all tabular files found. Call this first.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "results_dir": {
                     "type": "string",
-                    "description": "Path to the nf-core/rnaseq results directory.",
+                    "description": "Path to the directory containing analysis inputs.",
                 },
             },
             "required": ["results_dir"],
@@ -30,23 +30,33 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
     {
         "name": "load_counts",
-        "description": "Load the gene count matrix TSV and optional design CSV. Reports "
-        "sample names, gene counts, library sizes, and conditions if a design is loaded. "
-        "Also loads TPM values if available in the same directory.",
+        "description": "Load a gene count matrix and optional design file. Auto-detects "
+        "format: nf-core TSV (gene_id/gene_name), featureCounts (Geneid/Chr/Start/...), "
+        "or generic CSV/TSV (first column = gene IDs, rest = samples). Also auto-detects "
+        "separator. Reports sample names, library sizes, and conditions if design loaded.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "counts_path": {
                     "type": "string",
-                    "description": "Path to the salmon.merged.gene_counts.tsv file.",
+                    "description": "Path to the count matrix file (CSV or TSV).",
                 },
                 "design_path": {
                     "type": "string",
-                    "description": "Optional path to a design CSV with sample and condition columns.",
+                    "description": "Optional path to a design file (CSV/TSV) with 'sample' and 'condition' columns.",
                 },
             },
             "required": ["counts_path"],
         },
+    },
+    {
+        "name": "inspect_counts",
+        "description": "Summarise the loaded count matrix: value range, fraction of "
+        "non-integer values, fraction of zeros, per-sample stats. Use this to assess "
+        "whether data is raw counts, TPM/FPKM, or log-transformed before running DE. "
+        "DESeq2 requires raw counts — do not run it on normalised data. "
+        "Requires load_counts first.",
+        "input_schema": {"type": "object", "properties": {}},
     },
     {
         "name": "set_design",
@@ -185,6 +195,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
 TOOL_FUNCTIONS: dict[str, Callable[..., dict[str, Any]]] = {
     "scan_results": tools.scan_results,
     "load_counts": tools.load_counts,
+    "inspect_counts": tools.inspect_counts,
     "set_design": tools.set_design,
     "compute_qc": tools.compute_qc,
     "filter_low_counts": tools.filter_low_counts,

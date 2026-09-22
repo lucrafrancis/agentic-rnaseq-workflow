@@ -16,6 +16,7 @@ from agents.analysis.tools import (
     filter_low_counts,
     generate_report,
     get_top_genes,
+    inspect_counts,
     load_counts,
     run_deseq2,
     run_enrichment,
@@ -254,7 +255,127 @@ class TestGenerateReport:
         assert len(result["figures"]) > 0
 
 
-class TestSchemaConsistency:
+class TestScanResultsLooseFiles:
+    """scan_results should detect user-provided loose count files."""
+
+    def test_finds_loose_counts_csv(self, tmp_path: Path):
+        d = tmp_path / "data"
+        d.mkdir()
+        (d / "counts.csv").write_text("gene,sampleA,sampleB\nGENE1,100,200\n")
+        result = scan_results(str(d))
+        assert result["counts_found"] is True
+        assert result["source"] == "user-provided"
+        assert "counts.csv" in result["counts_path"]
+
+    def test_finds_design_file(self, tmp_path: Path):
+        d = tmp_path / "data"
+        d.mkdir()
+        (d / "counts.csv").write_text("gene,sampleA,sampleB\nGENE1,100,200\n")
+        (d / "design.csv").write_text("sample,condition\nsampleA,ctrl\nsampleB,treat\n")
+        result = scan_results(str(d))
+        assert result["design_found"] is True
+
+    def test_lists_tabular_files(self, tmp_path: Path):
+        d = tmp_path / "data"
+        d.mkdir()
+        (d / "counts.tsv").write_text("gene\tsA\nG1\t10\n")
+        (d / "metadata.csv").write_text("sample,condition\nsA,ctrl\n")
+        (d / "readme.txt").write_text("notes")
+        result = scan_results(str(d))
+        assert len(result["tabular_files"]) == 3
+
+    def test_nfcore_takes_priority(self, nfcore_results_dir: Path):
+        result = scan_results(str(nfcore_results_dir))
+        assert result["source"] == "nf-core"
+
+
+class TestLoadCountsFormats:
+    """load_counts should handle multiple input formats."""
+
+    def test_generic_csv(self, tmp_path: Path):
+        path = tmp_path / "counts.csv"
+        path.write_text("gene,sampleA,sampleB\nGENE1,100,200\nGENE2,50,75\n")
+        result = load_counts(str(path))
+        assert "error" not in result
+        assert result["detected_format"] == "generic"
+        assert result["n_genes"] == 2
+        assert result["n_samples"] == 2
+
+    def test_featurecounts_format(self, tmp_path: Path):
+        path = tmp_path / "counts.tsv"
+        path.write_text(
+            "Geneid\tChr\tStart\tEnd\tStrand\tLength\tsA\tsB\n"
+            "GENE1\tchr1\t100\t200\t+\t100\t500\t600\n"
+            "GENE2\tchr1\t300\t400\t-\t100\t50\t75\n"
+        )
+        result = load_counts(str(path))
+        assert "error" not in result
+        assert result["detected_format"] == "featureCounts"
+        assert result["n_samples"] == 2
+        assert "sA" in result["samples"]
+
+    def test_auto_detects_tsv(self, tmp_path: Path):
+        path = tmp_path / "data.tsv"
+        path.write_text("gene\tsA\tsB\nG1\t10\t20\nG2\t30\t40\n")
+        result = load_counts(str(path))
+        assert "error" not in result
+        assert result["n_samples"] == 2
+
+    def test_loads_design_tsv(self, tmp_path: Path):
+        counts = tmp_path / "counts.csv"
+        counts.write_text("gene,sA,sB\nG1,10,20\n")
+        design = tmp_path / "design.tsv"
+        design.write_text("sample\tcondition\nsA\tctrl\nsB\ttreat\n")
+        result = load_counts(str(counts), design_path=str(design))
+        assert result["design_loaded"] is True
+        assert set(result["conditions"]) == {"ctrl", "treat"}
+
+    def test_rejects_non_numeric(self, tmp_path: Path):
+        path = tmp_path / "bad.csv"
+        path.write_text("gene,sA,sB\nG1,hello,world\n")
+        result = load_counts(str(path))
+        assert result["error"] == "non_numeric_columns"
+
+
+class TestInspectCounts:
+    def test_requires_loaded_counts(self):
+        result = inspect_counts()
+        assert result["error"] == "counts_not_loaded"
+
+    def test_raw_counts_hints(self, count_matrix_tsv: Path):
+        load_counts(str(count_matrix_tsv))
+        result = inspect_counts()
+        assert "error" not in result
+        assert result["global"]["fraction_non_integer"] < 0.01
+        assert any("raw counts" in h for h in result["hints"])
+
+    def test_log_transformed_hints(self, tmp_path: Path):
+        import numpy as np
+        path = tmp_path / "log_counts.csv"
+        np.random.seed(42)
+        vals = np.random.uniform(0, 15, (100, 4))
+        lines = ["gene,sA,sB,sC,sD"]
+        for i, row in enumerate(vals):
+            lines.append(f"G{i},{row[0]:.4f},{row[1]:.4f},{row[2]:.4f},{row[3]:.4f}")
+        path.write_text("\n".join(lines) + "\n")
+        load_counts(str(path))
+        result = inspect_counts()
+        assert result["global"]["fraction_non_integer"] > 0.5
+        assert any("log-transformed" in h for h in result["hints"])
+
+    def test_per_sample_stats(self, count_matrix_tsv: Path):
+        load_counts(str(count_matrix_tsv))
+        result = inspect_counts()
+        assert "WT_REP1" in result["per_sample"]
+        assert "mean" in result["per_sample"]["WT_REP1"]
+
+    def test_json_serializable(self, count_matrix_tsv: Path):
+        load_counts(str(count_matrix_tsv))
+        result = inspect_counts()
+        json.dumps(result)
+
+
+
     def test_every_schema_has_a_callable(self):
         from agents.analysis.schemas import TOOL_FUNCTIONS, TOOL_SCHEMAS
         for schema in TOOL_SCHEMAS:
