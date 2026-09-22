@@ -27,12 +27,22 @@ from core.session import SESSION
 
 def main() -> None:
     if len(sys.argv) == 3 and sys.argv[1] == "--analyze":
-        results_dir = Path(sys.argv[2])
+        run_dir = Path(sys.argv[2])
+        if not run_dir.is_dir():
+            sys.exit(f"Not a directory: {run_dir}")
+        SESSION.resume_run(run_dir)
+        print(f"Resuming run for analysis: {run_dir}")
+
+        prompt_file = run_dir / "prompt.txt"
+        original_prompt = prompt_file.read_text().strip() if prompt_file.is_file() else ""
+        if not original_prompt:
+            print("Warning: no prompt.txt in run directory.")
+
+        results_dir = run_dir / "results"
         if not results_dir.is_dir():
-            sys.exit(f"Not a directory: {results_dir}")
-        SESSION.begin_run("analysis")
-        print(f"Run directory: {SESSION.paths.dir}")
-        _run_analysis(str(results_dir))
+            sys.exit(f"No results/ directory in {run_dir}. Nothing to analyse.")
+
+        _run_analysis(str(results_dir), original_prompt=original_prompt)
         return
 
     if len(sys.argv) == 3 and sys.argv[1] == "--resume":
@@ -139,7 +149,7 @@ def _run_pipeline(prompt: str) -> None:
         outcome = _submit_with_troubleshooting(str(samplesheet))
 
     # --- Stage 3: downstream analysis ---
-    _run_analysis(outcome["outdir"])
+    _run_analysis(outcome["outdir"], original_prompt=prompt)
 
 
 def _extract_accession(prompt: str) -> str | None:
@@ -293,23 +303,35 @@ def _submit_with_troubleshooting(samplesheet_path: str) -> dict:
     sys.exit(1)
 
 
-def _run_analysis(results_dir: str) -> None:
-    """Prompt for analysis instructions and run the analysis agent."""
+def _run_analysis(results_dir: str, *, original_prompt: str = "") -> None:
+    """Run the analysis agent. Uses the original prompt as base context;
+    optionally accepts extra instructions interactively (saved if provided)."""
     paths = SESSION.require_paths()
+
+    # Fall back to prompt.txt in the run directory if not passed explicitly
+    if not original_prompt:
+        prompt_file = paths.dir / "prompt.txt"
+        if prompt_file.is_file():
+            original_prompt = prompt_file.read_text().strip()
 
     print("\n" + "=" * 60)
     print("  Pipeline completed. Ready for downstream analysis.")
     print("=" * 60)
 
+    # Extra instructions (optional)
+    analysis_input = ""
     try:
-        analysis_input = input("\nAnalysis prompt (or 'skip'): ").strip()
+        analysis_input = input("\nAdditional analysis instructions (Enter to continue, 'skip' to skip): ").strip()
     except EOFError:
-        print("\nNo terminal input. Skipping analysis.")
-        return
+        pass
 
-    if not analysis_input or analysis_input.lower() == "skip":
+    if analysis_input.lower() == "skip":
         print("Analysis skipped.")
         return
+
+    if analysis_input:
+        (paths.dir / "analysis_prompt.txt").write_text(analysis_input + "\n")
+        print(f"Saved analysis prompt to {paths.dir / 'analysis_prompt.txt'}")
 
     # Optional paper PDF
     pdf_path = None
@@ -324,7 +346,12 @@ def _run_analysis(results_dir: str) -> None:
         pass
 
     # Build the user message
-    context_parts = [analysis_input, f"\nThe nf-core/rnaseq results are at: {results_dir}"]
+    context_parts = []
+    if original_prompt:
+        context_parts.append(original_prompt)
+    if analysis_input:
+        context_parts.append(f"\nAdditional instructions: {analysis_input}")
+    context_parts.append(f"\nThe nf-core/rnaseq results are at: {results_dir}")
     if paths.design.is_file():
         context_parts.append(f"A design CSV is available at: {paths.design}")
 

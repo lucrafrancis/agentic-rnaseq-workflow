@@ -9,7 +9,7 @@ Four stages, with human approval **between** stages (not inside the agent loop):
 0. **Download agent** (`agents/download/`) — resolves GEO/SRA accessions via NCBI/ENA APIs, generates a download script (aspera > aria2c > curl), validates MD5 checksums. Only runs when the prompt contains an accession but no FASTQ path.
 1. **Samplesheet agent** (`agents/samplesheet/`) — scans FASTQs, reads metadata, matches pairs, drafts/validates/saves a sample sheet, writes a report. Fully implemented and tested with real GEO data.
 2. **Submission agent** (`agents/submission/`) — reads the prompt and configures nextflow params (genome, skip_alignment, etc.) via an open-ended tool. Has a `run_command` tool to check system resources (RAM, CPUs) before configuring — always sets resource limits based on the actual machine. Writes `run_nextflow.sh` + `nf_params.yml` + `custom.config`. Pipeline params go in the YAML; resource limits (`max_memory`, `max_cpus`, `max_time`) go in `custom.config` as nextflow `resourceLimits` to avoid nf-schema validation warnings. Human approves the script before execution.
-3. **Analysis agent** (`agents/analysis/`) — downstream DE, enrichment, QC, and reporting on nf-core/rnaseq outputs. Python-only (PyDESeq2, gseapy, numpy PCA). Optionally accepts a paper PDF as context via Claude's native base64 content blocks. Fully implemented and tested.
+3. **Analysis agent** (`agents/analysis/`) — downstream DE, enrichment, QC, and reporting on nf-core/rnaseq outputs. Python-only (PyDESeq2, gseapy, numpy PCA). Optionally accepts a paper PDF as context via Claude's native base64 content blocks. Fetches GEO metadata and PubMed abstracts for context/citations. Fully implemented and tested.
 
 The full flow in `run.py`: download agent (if needed) → human approves download script → samplesheet agent → human approves sample sheet → submission agent configures params → human approves `run_nextflow.sh` → nextflow runs (with troubleshooting on failure) → post-run warning review → analysis agent runs downstream analysis.
 
@@ -32,7 +32,7 @@ The prompt file describes the data (FASTQ location, organism, metadata path, str
 - Human approval belongs between stages, never inside the agent loop
 - Keep code minimal — no bloat, no premature abstractions
 - Tests are offline (no API calls)
-- Tools must enforce correctness, not the LLM — paths are resolved to absolute in the tools themselves (`scan_fastqs`, `draft_samplesheet`), `save_samplesheet` always writes to the canonical run directory location, and `SubmissionParams` routes resource limits to `custom.config` vs pipeline params to `nf_params.yml` automatically. The LLM is a lossy intermediary; don't trust it to preserve values faithfully between tool calls.
+- Tools must enforce correctness, not the LLM — paths are resolved to absolute in the tools themselves (`scan_fastqs`, `draft_samplesheet`), `save_samplesheet` always writes to the canonical run directory location, `SubmissionParams` routes resource limits to `custom.config` vs pipeline params to `nf_params.yml` automatically, `configure_submission` forces `pseudo_aligner: salmon` when `skip_alignment` is set (so counts are always produced), and `generate_report` returns actual figure paths and appends disclaimers rather than trusting the LLM to get filenames or caveats right. The LLM is a lossy intermediary; don't trust it to preserve values faithfully between tool calls.
 
 ## Prerequisites
 
@@ -46,9 +46,14 @@ The prompt file describes the data (FASTQ location, organism, metadata path, str
 
 ## Analysis agent tools
 
-`scan_results` → `load_counts` → `set_design` (if needed) → `compute_qc` → `filter_low_counts` → `run_deseq2` → `get_top_genes` → `run_enrichment` → `summarize_findings` → `generate_report`
+`fetch_geo_metadata` → `fetch_abstract` → `scan_results` → `load_counts` → `inspect_counts` → `set_design` (if needed) → `compute_qc` → `filter_low_counts` → `run_deseq2` → `get_top_genes` → `run_enrichment` → `summarize_findings` → `generate_report`
 
+- `fetch_geo_metadata` / `fetch_abstract` — NCBI E-utilities for GEO series metadata and PubMed abstracts. Provides cell type, organism, experimental context, and citable references. Called first when a GEO accession is in the prompt.
+- `inspect_counts` — detects whether data is raw counts vs normalised (TPM/FPKM/log). Prevents running DESeq2 on pre-normalised data.
 - `save_design` (samplesheet agent) writes `design.csv` for traceability; `set_design` (analysis agent) is the fallback when none exists
+- `run_enrichment` takes a `label` param (e.g. "upregulated", "downregulated") — results accumulate across calls, each label gets its own figures
+- `summarize_findings` returns `software_versions` (real installed versions) and `data_source` ("nf-core" or "user-provided") to prevent hallucination in the Methods section
+- `generate_report` returns a `figures` dict with actual file paths — the LLM must use only those, not invent filenames. Appends a hallucination disclaimer automatically.
 - Enrichment uses gseapy/Enrichr (network call) — mocked in tests
 - PCA via numpy SVD on log2(counts+1), no scanpy dependency
 
@@ -58,14 +63,24 @@ The prompt file describes the data (FASTQ location, organism, metadata path, str
 - On success: LLM scans log for WARN lines and produces a concise summary of anything affecting downstream analysis.
 - Samplesheet agent cites GEO/SRA URLs when assigning conditions, with instructions on where to verify.
 
+## Known issues
+
+- **Resume logic for partial results** — `run.py:120` checks `results_dir.is_dir() and any(results_dir.iterdir())`, which treats QC-only output (no count matrices) as a complete run. Needs a smarter check for quantification output specifically.
+
+## Test datasets
+
+- `examples/GSE245856/` — VPA treatment in HEK293T cells, 6 samples (3 CTRL, 3 VPA). `design.csv` and `prompt.txt` are in git; `counts.csv` (47k genes) is gitignored and must be generated locally. Used for analysis agent testing.
+
 ## Future direction
 
 - **Streamlit UI** — wrap the CLI in a web app for non-coders. Local mode (user has nextflow/Docker), with cloud submission as a later addition.
 - **Multi-provider LLM support** — abstract the agent loop to support OpenAI alongside Anthropic. Thin adapter layer over the current `loop.py` pattern.
+- **scRNA-seq workflow** — separate repo, using nf-core for preprocessing with custom downstream analysis. Planned port of the agentic pattern.
 
 ## Don't
 
 - Don't add approval logic inside agent tool calls
 - Don't auto-approve anything — all approval requires interactive human input
 - Don't trust the LLM to relay values (paths, filenames) faithfully between tools — enforce in the tool code
+- Don't commit large data files (count matrices, FASTQ, results) — they belong in `.gitignore`
 - Don't make changes without asking first

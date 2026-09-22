@@ -411,8 +411,16 @@ def inspect_counts() -> Summary:
         }
 
     hints = []
+    salmon_fractional = False
     if global_stats["fraction_non_integer"] < 0.01 and global_stats["max"] > 100:
         hints.append("Values are almost entirely integers with a wide range — likely raw counts.")
+    elif 0.01 <= global_stats["fraction_non_integer"] <= 0.5 and global_stats["max"] > 100:
+        salmon_fractional = True
+        hints.append(
+            "Mostly integers with some fractional values (typical of Salmon/kallisto "
+            "probabilistic quantification). These are raw counts suitable for DESeq2 — "
+            "fractional values will be rounded to integers before DE analysis."
+        )
     elif global_stats["fraction_non_integer"] > 0.5 and global_stats["max"] < 25:
         hints.append("Mostly non-integer values in a narrow range — likely log-transformed. "
                       "DESeq2 requires raw counts; do not run it on this data.")
@@ -424,6 +432,7 @@ def inspect_counts() -> Summary:
         "global": global_stats,
         "per_sample": per_sample,
         "hints": hints,
+        "salmon_fractional": salmon_fractional,
     }
 
 
@@ -570,8 +579,18 @@ def run_deseq2(contrast: list[str]) -> Summary:
     from pydeseq2.dds import DeseqDataSet
     from pydeseq2.ds import DeseqStats
 
-    # PyDESeq2 expects samples x genes
+    # PyDESeq2 expects samples x genes with integer counts
     counts_t = SESSION.counts_df.T
+
+    # Salmon/kallisto produce fractional counts from probabilistic assignment.
+    # Round to integers only when the data looks like raw counts with minor
+    # fractional noise (not normalised data). Detection mirrors inspect_counts.
+    counts_rounded = False
+    frac_non_int = float(np.mean(counts_t.values != np.floor(counts_t.values)))
+    if frac_non_int > 0.005 and float(counts_t.values.max()) > 100:
+        counts_t = counts_t.round().astype(int)
+        counts_rounded = True
+
     # Align design to count matrix samples
     design = SESSION.design_df.loc[counts_t.index]
 
@@ -603,7 +622,11 @@ def run_deseq2(contrast: list[str]) -> Summary:
             out["gene_name"] = str(SESSION.gene_names.loc[gene_id])
         return out
 
-    return {
+    # Check replication per group
+    group_sizes = design[factor].value_counts()
+    min_reps = int(group_sizes.min())
+
+    result: Summary = {
         "contrast": contrast,
         "n_tested": int(results["padj"].notna().sum()),
         "n_significant": int(len(sig)),
@@ -612,7 +635,18 @@ def run_deseq2(contrast: list[str]) -> Summary:
         "top_up": [_gene_row(gid, row) for gid, row in top_up.iterrows()],
         "top_down": [_gene_row(gid, row) for gid, row in top_down.iterrows()],
         "de_results_path": str(paths.de_results),
+        "replicates_per_group": group_sizes.to_dict(),
     }
+    if min_reps < 3:
+        result["low_replication_warning"] = (
+            f"Only {min_reps} replicates in the smallest group. "
+            "Dispersion estimates are unreliable with < 3 replicates — "
+            "treat DE results as exploratory, not confirmatory."
+        )
+    if counts_rounded:
+        result["counts_rounded"] = True
+        result["pct_non_integer_before_rounding"] = round(frac_non_int * 100, 1)
+    return result
 
 
 def get_top_genes(n: int = 20, direction: str = "both") -> Summary:
@@ -765,6 +799,25 @@ def summarize_findings() -> Summary:
             versions[pkg] = __import__(pkg).__version__
         except (ImportError, AttributeError):
             pass
+
+    # Pipeline versions from nf-core software versions YAML
+    if SESSION.results_dir:
+        versions_yml = SESSION.results_dir / "pipeline_info" / "nf_core_rnaseq_software_mqc_versions.yml"
+        if versions_yml.is_file():
+            try:
+                import yaml
+                pipeline_versions = yaml.safe_load(versions_yml.read_text())
+            except Exception:
+                pipeline_versions = {}
+            workflow = pipeline_versions.get("Workflow", {})
+            if workflow:
+                out["pipeline_versions"] = {
+                    k: str(v) for k, v in workflow.items()
+                }
+            salmon_ver = (pipeline_versions.get("SALMON_QUANT") or {}).get("salmon")
+            if salmon_ver:
+                out.setdefault("pipeline_versions", {})["salmon"] = str(salmon_ver)
+
     out["software_versions"] = versions
 
     return out
@@ -1070,9 +1123,15 @@ def generate_report(report_markdown: str) -> Summary:
         "Large language models can produce inaccurate statements (hallucinations). "
         "All biological claims, gene annotations, pathway interpretations, and "
         "cited references should be independently verified before use in "
-        "publications or clinical decisions."
+        "publications or clinical decisions. "
+        "Biological roles listed alongside gene names are AI-generated summaries "
+        "and must be verified against primary databases (UniProt, NCBI Gene)."
     )
-    report_text = report_markdown.rstrip() + disclaimer + "\n"
+    # Strip trailing horizontal rules to avoid doubling
+    cleaned = report_markdown.rstrip()
+    while cleaned.endswith("---"):
+        cleaned = cleaned[:-3].rstrip()
+    report_text = cleaned + disclaimer + "\n"
 
     # --- Write report ---
     paths.analysis_report.write_text(report_text)
