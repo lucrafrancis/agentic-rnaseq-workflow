@@ -45,6 +45,12 @@ Guidelines:
   covering: experimental design, QC summary, DE results, enrichment findings, and
   interpretation. If DE was skipped because data was pre-normalised, explain why and
   focus the report on what analysis was possible.
+- Place figures inline in the relevant sections, not grouped at the end. Reference them
+  as ![caption](figures/<name>.png). Available figure names:
+    - QC: library_sizes.png, pca.png, sample_correlation.png, pc_association.png
+    - QC (per variable): pca_<variable>.png (one per extra design column)
+    - DE: volcano.png, ma_plot.png, de_heatmap.png
+    - Enrichment: enrichment_<gene_set>.png
 
 If the user provides specific analysis instructions, follow them. If a paper PDF was
 provided, use its methods and results to guide your analysis choices.

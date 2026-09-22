@@ -249,10 +249,39 @@ class TestGenerateReport:
         load_counts(str(count_matrix_tsv), design_path=str(design_csv))
         filter_low_counts(min_count=1, min_samples=1)
         run_deseq2(["condition", "KO", "WT"])
-        result = generate_report("# Test Report\n\nThis is a test.")
+        result = generate_report("# Test Report\n\nThis is a test.\n\n![PCA](figures/pca.png)")
         assert "error" not in result
         assert Path(result["report_path"]).is_file()
-        assert len(result["figures"]) > 0
+        assert result["n_figures"] > 0
+        assert "pca" in result["figures"]
+
+    def test_generates_qc_figures(self, count_matrix_tsv: Path, design_csv: Path):
+        SESSION.begin_run("test")
+        load_counts(str(count_matrix_tsv), design_path=str(design_csv))
+        result = generate_report("# QC Report")
+        assert "library_sizes" in result["figures"]
+        assert "pca" in result["figures"]
+        assert "sample_correlation" in result["figures"]
+
+    def test_generates_de_figures(self, count_matrix_tsv: Path, design_csv: Path):
+        SESSION.begin_run("test")
+        load_counts(str(count_matrix_tsv), design_path=str(design_csv))
+        filter_low_counts(min_count=1, min_samples=1)
+        run_deseq2(["condition", "KO", "WT"])
+        result = generate_report("# DE Report")
+        assert "volcano" in result["figures"]
+        assert "ma_plot" in result["figures"]
+        # de_heatmap only generated when there are significant genes (padj < 0.05);
+        # synthetic data with 2 replicates may not produce any
+
+    def test_report_written_as_is(self, count_matrix_tsv: Path):
+        SESSION.begin_run("test")
+        load_counts(str(count_matrix_tsv))
+        md = "# My Report\n\n![PCA](figures/pca.png)\n\nSome text."
+        result = generate_report(md)
+        content = Path(result["report_path"]).read_text()
+        assert "![PCA](figures/pca.png)" in content
+        assert "## Figures" not in content
 
 
 class TestScanResultsLooseFiles:

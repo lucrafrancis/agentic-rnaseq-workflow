@@ -613,129 +613,289 @@ def summarize_findings() -> Summary:
 
 
 def generate_report(report_markdown: str) -> Summary:
-    """Render figures, write DE results, and assemble the analysis report.
+    """Generate all analysis figures and write the report.
 
-    The agent supplies the narrative (report_markdown); this tool handles the
-    deterministic artifacts: figures and stitching them into the report.
+    The agent supplies the full report as Markdown with inline figure references
+    (e.g. ![PCA](figures/pca.png)). This tool generates the figures at known paths
+    and writes the report as-is.
     """
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    from matplotlib.colors import Normalize
+    from matplotlib.cm import ScalarMappable
 
     paths = SESSION.require_paths()
     paths.analysis_figures.mkdir(parents=True, exist_ok=True)
     figures: list[Path] = []
 
-    # Volcano plot
-    if SESSION.deseq_results is not None:
-        results = SESSION.deseq_results.dropna(subset=["padj"])
-        fig, ax = plt.subplots(figsize=(8, 6))
-        sig_mask = results["padj"] < 0.05
-        ax.scatter(
-            results.loc[~sig_mask, "log2FoldChange"],
-            -np.log10(results.loc[~sig_mask, "padj"]),
-            c="grey", alpha=0.5, s=10, label="NS",
-        )
-        ax.scatter(
-            results.loc[sig_mask, "log2FoldChange"],
-            -np.log10(results.loc[sig_mask, "padj"]),
-            c="red", alpha=0.6, s=10, label="padj < 0.05",
-        )
-        ax.set_xlabel("log2 Fold Change")
-        ax.set_ylabel("-log10(padj)")
-        ax.legend()
-        ax.set_title("Volcano Plot")
-        path = paths.analysis_figures / "volcano.png"
-        fig.savefig(path, dpi=120, bbox_inches="tight")
-        plt.close(fig)
-        figures.append(path)
+    # --- Consistent style + palette ---
+    _PALETTE = ["#4C72B0", "#DD8452", "#55A868", "#C44E52", "#8172B3",
+                "#937860", "#DA8BC3", "#8C8C8C", "#CCB974", "#64B5CD"]
+    _SIG_COLOR = "#C44E52"
+    _NS_COLOR = "#B0B0B0"
 
-        # MA plot
-        fig, ax = plt.subplots(figsize=(8, 6))
-        ax.scatter(
-            np.log10(results.loc[~sig_mask, "baseMean"] + 1),
-            results.loc[~sig_mask, "log2FoldChange"],
-            c="grey", alpha=0.5, s=10, label="NS",
-        )
-        ax.scatter(
-            np.log10(results.loc[sig_mask, "baseMean"] + 1),
-            results.loc[sig_mask, "log2FoldChange"],
-            c="red", alpha=0.6, s=10, label="padj < 0.05",
-        )
-        ax.set_xlabel("log10(baseMean + 1)")
-        ax.set_ylabel("log2 Fold Change")
-        ax.axhline(0, color="black", linewidth=0.5)
-        ax.legend()
-        ax.set_title("MA Plot")
-        path = paths.analysis_figures / "ma_plot.png"
-        fig.savefig(path, dpi=120, bbox_inches="tight")
-        plt.close(fig)
-        figures.append(path)
+    def _style_ax(ax, title=""):
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.tick_params(labelsize=10)
+        if title:
+            ax.set_title(title, fontsize=13, fontweight="bold", pad=10)
 
-    # PCA plot
+    def _save(fig, name):
+        p = paths.analysis_figures / name
+        fig.savefig(p, dpi=150, bbox_inches="tight", facecolor="white")
+        plt.close(fig)
+        figures.append(p)
+
+    def _condition_colors(conditions_series):
+        unique = list(dict.fromkeys(conditions_series))
+        return {c: _PALETTE[i % len(_PALETTE)] for i, c in enumerate(unique)}
+
+    # --- PCA (reusable computation) ---
+    pca_data = None
     if SESSION.counts_df is not None:
         counts = SESSION.counts_df
         log_counts = np.log2(counts.values.astype(float).T + 1)
         centered = log_counts - log_counts.mean(axis=0)
-        U, S, _Vt = np.linalg.svd(centered, full_matrices=False)
-        n_comps = min(2, len(S))
-        coords = U[:, :n_comps] * S[:n_comps]
+        U, S, Vt = np.linalg.svd(centered, full_matrices=False)
+        n_pcs = min(10, len(S))
+        coords = U[:, :n_pcs] * S[:n_pcs]
         var_exp = (S ** 2) / (S ** 2).sum()
-
-        fig, ax = plt.subplots(figsize=(8, 6))
         samples = list(counts.columns)
+        pca_data = {"coords": coords, "var_exp": var_exp, "samples": samples, "n_pcs": n_pcs}
 
+    # --- Library size bar plot ---
+    if SESSION.counts_df is not None:
+        counts = SESSION.counts_df
+        samples = list(counts.columns)
+        lib_sizes = [float(counts[s].sum()) for s in samples]
+
+        fig, ax = plt.subplots(figsize=(max(6, len(samples) * 0.8), 5))
+        colors = [_NS_COLOR] * len(samples)
+        if SESSION.design_df is not None:
+            cmap = _condition_colors(SESSION.design_df.loc[samples, "condition"])
+            colors = [cmap[SESSION.design_df.loc[s, "condition"]] for s in samples]
+        bars = ax.bar(range(len(samples)), [s / 1e6 for s in lib_sizes], color=colors, edgecolor="white", linewidth=0.5)
+        ax.set_xticks(range(len(samples)))
+        ax.set_xticklabels(samples, rotation=45, ha="right", fontsize=9)
+        ax.set_ylabel("Library size (millions)", fontsize=11)
+        _style_ax(ax, "Library sizes")
+        if SESSION.design_df is not None:
+            for cond, color in cmap.items():
+                ax.bar([], [], color=color, label=cond)
+            ax.legend(fontsize=9, frameon=False)
+        _save(fig, "library_sizes.png")
+
+    # --- PCA by condition ---
+    if pca_data is not None:
+        coords = pca_data["coords"]
+        var_exp = pca_data["var_exp"]
+        samples = pca_data["samples"]
+
+        fig, ax = plt.subplots(figsize=(7, 6))
         if SESSION.design_df is not None:
             conditions = SESSION.design_df.loc[samples, "condition"]
-            for cond in conditions.unique():
-                mask = conditions == cond
-                idx = [i for i, m in enumerate(mask) if m]
-                ax.scatter(
-                    coords[idx, 0], coords[idx, 1] if n_comps > 1 else np.zeros(len(idx)),
-                    label=cond, s=60,
-                )
+            cmap = _condition_colors(conditions)
+            for cond in dict.fromkeys(conditions):
+                mask = [i for i, c in enumerate(conditions) if c == cond]
+                ax.scatter(coords[mask, 0], coords[mask, 1] if pca_data["n_pcs"] > 1 else np.zeros(len(mask)),
+                           c=cmap[cond], label=cond, s=70, edgecolors="white", linewidths=0.5, zorder=3)
+            ax.legend(fontsize=9, frameon=False)
         else:
-            ax.scatter(coords[:, 0], coords[:, 1] if n_comps > 1 else np.zeros(len(samples)), s=60)
-
+            ax.scatter(coords[:, 0], coords[:, 1] if pca_data["n_pcs"] > 1 else np.zeros(len(samples)),
+                       c=_PALETTE[0], s=70, edgecolors="white", linewidths=0.5, zorder=3)
         for i, s in enumerate(samples):
-            ax.annotate(s, (coords[i, 0], coords[i, 1] if n_comps > 1 else 0), fontsize=7, alpha=0.7)
+            ax.annotate(s, (coords[i, 0], coords[i, 1] if pca_data["n_pcs"] > 1 else 0),
+                        fontsize=8, alpha=0.7, textcoords="offset points", xytext=(5, 5))
+        ax.set_xlabel(f"PC1 ({var_exp[0]:.1%} variance)", fontsize=11)
+        ax.set_ylabel(f"PC2 ({var_exp[1]:.1%} variance)" if pca_data["n_pcs"] > 1 else "PC2", fontsize=11)
+        _style_ax(ax, "PCA — log2(counts + 1)")
+        _save(fig, "pca.png")
 
-        ax.set_xlabel(f"PC1 ({var_exp[0]:.1%} variance)")
-        ax.set_ylabel(f"PC2 ({var_exp[1]:.1%} variance)" if n_comps > 1 else "PC2")
-        ax.legend()
-        ax.set_title("PCA — log2(counts + 1)")
-        path = paths.analysis_figures / "pca.png"
-        fig.savefig(path, dpi=120, bbox_inches="tight")
-        plt.close(fig)
-        figures.append(path)
+    # --- PCA coloured by other metadata variables ---
+    if pca_data is not None and SESSION.design_df is not None:
+        extra_cols = [c for c in SESSION.design_df.columns if c != "condition"]
+        for col in extra_cols:
+            vals = SESSION.design_df.loc[samples, col]
+            fig, ax = plt.subplots(figsize=(7, 6))
 
-    # Enrichment bar plot
+            if vals.dtype == object or vals.nunique() <= 8:
+                unique_vals = list(dict.fromkeys(vals))
+                col_cmap = {v: _PALETTE[i % len(_PALETTE)] for i, v in enumerate(unique_vals)}
+                for val in unique_vals:
+                    mask = [i for i, v in enumerate(vals) if v == val]
+                    ax.scatter(coords[mask, 0], coords[mask, 1], c=col_cmap[val],
+                               label=str(val), s=70, edgecolors="white", linewidths=0.5, zorder=3)
+                ax.legend(fontsize=9, frameon=False, title=col)
+            else:
+                numeric_vals = pd.to_numeric(vals, errors="coerce")
+                sc = ax.scatter(coords[:, 0], coords[:, 1], c=numeric_vals, cmap="viridis",
+                                s=70, edgecolors="white", linewidths=0.5, zorder=3)
+                plt.colorbar(sc, ax=ax, label=col)
+
+            for i, s in enumerate(samples):
+                ax.annotate(s, (coords[i, 0], coords[i, 1]),
+                            fontsize=8, alpha=0.7, textcoords="offset points", xytext=(5, 5))
+            ax.set_xlabel(f"PC1 ({var_exp[0]:.1%} variance)", fontsize=11)
+            ax.set_ylabel(f"PC2 ({var_exp[1]:.1%} variance)", fontsize=11)
+            _style_ax(ax, f"PCA coloured by {col}")
+            _save(fig, f"pca_{col.lower().replace(' ', '_')}.png")
+
+    # --- PC–metadata association heatmap ---
+    if pca_data is not None and SESSION.design_df is not None:
+        design_cols = list(SESSION.design_df.columns)
+        n_pcs_show = min(pca_data["n_pcs"], 10)
+        if design_cols and n_pcs_show >= 2:
+            from scipy import stats as sp_stats
+            assoc_matrix = np.full((len(design_cols), n_pcs_show), np.nan)
+            for ci, col in enumerate(design_cols):
+                vals = SESSION.design_df.loc[samples, col]
+                for pc_i in range(n_pcs_show):
+                    pc_vals = coords[:, pc_i]
+                    numeric_vals = pd.to_numeric(vals, errors="coerce")
+                    if numeric_vals.notna().all():
+                        r, _ = sp_stats.pearsonr(numeric_vals.values, pc_vals)
+                        assoc_matrix[ci, pc_i] = r ** 2
+                    elif vals.nunique() > 1:
+                        groups = [pc_vals[[j for j in range(len(vals)) if vals.iloc[j] == g]]
+                                  for g in vals.unique() if sum(vals == g) > 0]
+                        if len(groups) >= 2 and all(len(g) > 0 for g in groups):
+                            f_stat, p_val = sp_stats.f_oneway(*groups)
+                            ss_between = sum(len(g) * (g.mean() - pc_vals.mean()) ** 2 for g in groups)
+                            ss_total = np.sum((pc_vals - pc_vals.mean()) ** 2)
+                            assoc_matrix[ci, pc_i] = ss_between / ss_total if ss_total > 0 else 0
+
+            fig, ax = plt.subplots(figsize=(max(6, n_pcs_show * 0.8), max(3, len(design_cols) * 0.6 + 1)))
+            im = ax.imshow(assoc_matrix, aspect="auto", cmap="YlOrRd", vmin=0, vmax=1)
+            ax.set_xticks(range(n_pcs_show))
+            ax.set_xticklabels([f"PC{i+1}\n({pca_data['var_exp'][i]:.1%})" for i in range(n_pcs_show)], fontsize=9)
+            ax.set_yticks(range(len(design_cols)))
+            ax.set_yticklabels(design_cols, fontsize=10)
+            for ci in range(len(design_cols)):
+                for pi in range(n_pcs_show):
+                    val = assoc_matrix[ci, pi]
+                    if not np.isnan(val):
+                        ax.text(pi, ci, f"{val:.2f}", ha="center", va="center",
+                                fontsize=8, color="white" if val > 0.5 else "black")
+            plt.colorbar(im, ax=ax, label="R² (association)", shrink=0.8)
+            _style_ax(ax, "PC–metadata associations")
+            ax.spines["left"].set_visible(False)
+            ax.spines["bottom"].set_visible(False)
+            _save(fig, "pc_association.png")
+
+    # --- Sample correlation heatmap ---
+    if SESSION.counts_df is not None:
+        counts = SESSION.counts_df
+        log_counts_df = np.log2(counts.astype(float) + 1)
+        corr = log_counts_df.corr(method="pearson")
+        samples = list(corr.columns)
+        n = len(samples)
+
+        fig, ax = plt.subplots(figsize=(max(5, n * 0.6), max(4, n * 0.5)))
+        im = ax.imshow(corr.values, cmap="RdYlBu_r", vmin=corr.values.min(), vmax=1)
+        ax.set_xticks(range(n))
+        ax.set_xticklabels(samples, rotation=45, ha="right", fontsize=9)
+        ax.set_yticks(range(n))
+        ax.set_yticklabels(samples, fontsize=9)
+        for i in range(n):
+            for j in range(n):
+                val = corr.values[i, j]
+                ax.text(j, i, f"{val:.2f}", ha="center", va="center", fontsize=7,
+                        color="white" if val < 0.95 else "black")
+        plt.colorbar(im, ax=ax, label="Pearson r", shrink=0.8)
+        _style_ax(ax, "Sample correlation — log2(counts + 1)")
+        ax.spines["left"].set_visible(False)
+        ax.spines["bottom"].set_visible(False)
+        _save(fig, "sample_correlation.png")
+
+    # --- Volcano plot ---
+    if SESSION.deseq_results is not None:
+        results = SESSION.deseq_results.dropna(subset=["padj"])
+        sig_mask = results["padj"] < 0.05
+
+        fig, ax = plt.subplots(figsize=(7, 6))
+        ax.scatter(results.loc[~sig_mask, "log2FoldChange"],
+                   -np.log10(results.loc[~sig_mask, "padj"]),
+                   c=_NS_COLOR, alpha=0.4, s=12, label="NS", zorder=2)
+        ax.scatter(results.loc[sig_mask, "log2FoldChange"],
+                   -np.log10(results.loc[sig_mask, "padj"]),
+                   c=_SIG_COLOR, alpha=0.6, s=12, label="padj < 0.05", zorder=3)
+        ax.axhline(-np.log10(0.05), color="#888888", linewidth=0.8, linestyle="--", alpha=0.5)
+        ax.set_xlabel("log2 Fold Change", fontsize=11)
+        ax.set_ylabel("-log10(padj)", fontsize=11)
+        ax.legend(fontsize=9, frameon=False)
+        _style_ax(ax, "Volcano plot")
+        _save(fig, "volcano.png")
+
+        # --- MA plot ---
+        fig, ax = plt.subplots(figsize=(7, 6))
+        ax.scatter(np.log10(results.loc[~sig_mask, "baseMean"] + 1),
+                   results.loc[~sig_mask, "log2FoldChange"],
+                   c=_NS_COLOR, alpha=0.4, s=12, label="NS", zorder=2)
+        ax.scatter(np.log10(results.loc[sig_mask, "baseMean"] + 1),
+                   results.loc[sig_mask, "log2FoldChange"],
+                   c=_SIG_COLOR, alpha=0.6, s=12, label="padj < 0.05", zorder=3)
+        ax.axhline(0, color="#333333", linewidth=0.8)
+        ax.set_xlabel("log10(baseMean + 1)", fontsize=11)
+        ax.set_ylabel("log2 Fold Change", fontsize=11)
+        ax.legend(fontsize=9, frameon=False)
+        _style_ax(ax, "MA plot")
+        _save(fig, "ma_plot.png")
+
+    # --- Top DE genes heatmap ---
+    if SESSION.deseq_results is not None and SESSION.counts_df is not None:
+        sig = SESSION.deseq_results.dropna(subset=["padj"])
+        sig = sig[sig["padj"] < 0.05]
+        if len(sig) > 0:
+            n_top = min(40, len(sig))
+            top_genes = sig.nsmallest(n_top, "padj").index
+            counts_top = SESSION.counts_df.loc[top_genes]
+            log_vals = np.log2(counts_top.values.astype(float) + 1)
+            row_means = log_vals.mean(axis=1, keepdims=True)
+            row_stds = log_vals.std(axis=1, keepdims=True)
+            row_stds[row_stds == 0] = 1
+            z_scores = (log_vals - row_means) / row_stds
+
+            gene_labels = []
+            for gid in top_genes:
+                if SESSION.gene_names is not None and gid in SESSION.gene_names.index:
+                    gene_labels.append(str(SESSION.gene_names.loc[gid]))
+                else:
+                    gene_labels.append(str(gid))
+
+            fig, ax = plt.subplots(figsize=(max(5, len(samples) * 0.7), max(6, n_top * 0.25)))
+            im = ax.imshow(z_scores, aspect="auto", cmap="RdBu_r", vmin=-2.5, vmax=2.5)
+            ax.set_xticks(range(len(samples)))
+            ax.set_xticklabels(samples, rotation=45, ha="right", fontsize=9)
+            ax.set_yticks(range(n_top))
+            ax.set_yticklabels(gene_labels, fontsize=7)
+            plt.colorbar(im, ax=ax, label="z-score", shrink=0.6)
+            _style_ax(ax, f"Top {n_top} DE genes (z-scored)")
+            ax.spines["left"].set_visible(False)
+            ax.spines["bottom"].set_visible(False)
+            _save(fig, "de_heatmap.png")
+
+    # --- Enrichment bar plots ---
     if SESSION.enrichment_results and "results" in SESSION.enrichment_results:
         for gs, terms in SESSION.enrichment_results["results"].items():
             if not terms:
                 continue
             top = terms[:10]
-            fig, ax = plt.subplots(figsize=(10, 6))
-            term_names = [t["term"][:60] for t in reversed(top)]
+            fig, ax = plt.subplots(figsize=(9, max(3, len(top) * 0.4)))
+            term_names = [t["term"][:65] for t in reversed(top)]
             pvals = [-np.log10(t["padj"]) if t["padj"] > 0 else 10 for t in reversed(top)]
-            ax.barh(term_names, pvals)
-            ax.set_xlabel("-log10(padj)")
-            ax.set_title(gs.replace("_", " "))
-            path = paths.analysis_figures / f"enrichment_{gs.lower().replace(' ', '_')}.png"
-            fig.savefig(path, dpi=120, bbox_inches="tight")
-            plt.close(fig)
-            figures.append(path)
+            ax.barh(term_names, pvals, color=_PALETTE[0], edgecolor="white", linewidth=0.5)
+            ax.set_xlabel("-log10(padj)", fontsize=11)
+            _style_ax(ax, gs.replace("_", " "))
+            fig_name = f"enrichment_{gs.lower().replace(' ', '_')}.png"
+            _save(fig, fig_name)
 
-    # Assemble report
-    figures_md = ""
-    if figures:
-        figures_md = "\n\n## Figures\n\n" + "\n\n".join(
-            f"![{p.stem}](figures/{p.name})" for p in figures
-        )
-    paths.analysis_report.write_text(report_markdown.rstrip() + figures_md + "\n")
+    # --- Write report ---
+    paths.analysis_report.write_text(report_markdown.rstrip() + "\n")
 
     return {
         "report_path": str(paths.analysis_report),
-        "figures": [str(p) for p in figures],
-        "report_chars": len(report_markdown),
+        "figures": {p.stem: f"figures/{p.name}" for p in figures},
+        "n_figures": len(figures),
     }

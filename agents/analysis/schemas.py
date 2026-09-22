@@ -176,15 +176,18 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
     {
         "name": "generate_report",
-        "description": "Render figures (volcano, MA, PCA, enrichment) and assemble the "
-        "final Markdown report. Provide the report narrative as report_markdown; the "
-        "tool adds the figures. Call this last.",
+        "description": "Generate all analysis figures and write the Markdown report. "
+        "Figures are generated at known paths under figures/: pca.png, library_sizes.png, "
+        "sample_correlation.png, volcano.png, ma_plot.png, de_heatmap.png, "
+        "enrichment_*.png, pca_<variable>.png, pc_association.png. "
+        "Place figure references inline in the relevant report sections using "
+        "![caption](figures/<name>.png). The tool writes the report as-is. Call this last.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "report_markdown": {
                     "type": "string",
-                    "description": "The full analysis report as Markdown, written by you from the findings.",
+                    "description": "The full analysis report as Markdown with inline figure references.",
                 },
             },
             "required": ["report_markdown"],
