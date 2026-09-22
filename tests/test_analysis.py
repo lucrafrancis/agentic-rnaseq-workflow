@@ -13,6 +13,8 @@ import pytest
 
 from agents.analysis.tools import (
     compute_qc,
+    fetch_abstract,
+    fetch_geo_metadata,
     filter_low_counts,
     generate_report,
     get_top_genes,
@@ -25,6 +27,98 @@ from agents.analysis.tools import (
     summarize_findings,
 )
 from core.session import SESSION
+
+
+class TestFetchGeoMetadata:
+    def test_rejects_non_gse(self):
+        result = fetch_geo_metadata("SRP123456")
+        assert result["error"] == "bad_accession"
+
+    def test_parses_response(self, monkeypatch: pytest.MonkeyPatch):
+        search_json = json.dumps({
+            "esearchresult": {"idlist": ["200245856"]}
+        })
+        summary_json = json.dumps({
+            "result": {
+                "200245856": {
+                    "title": "VPA treatment study",
+                    "summary": "RNA-seq of VPA-treated cells",
+                    "taxon": "Homo sapiens",
+                    "n_samples": 6,
+                    "samples": [
+                        {"accession": "GSM1", "title": "CTRL Rep1"},
+                        {"accession": "GSM2", "title": "VPA Rep1"},
+                    ],
+                    "pubmedids": ["12345678"],
+                    "gpl": "28038",
+                }
+            }
+        })
+        call_count = [0]
+
+        def mock_get(url):
+            call_count[0] += 1
+            if "esearch" in url:
+                return search_json
+            return summary_json
+
+        monkeypatch.setattr("agents.analysis.tools._ncbi_get", mock_get)
+        result = fetch_geo_metadata("GSE245856")
+        assert result["accession"] == "GSE245856"
+        assert result["organism"] == "Homo sapiens"
+        assert result["title"] == "VPA treatment study"
+        assert "12345678" in result["pubmed_ids"]
+        assert len(result["samples"]) == 2
+
+    def test_handles_network_error(self, monkeypatch: pytest.MonkeyPatch):
+        import urllib.error
+        def mock_get(url):
+            raise urllib.error.URLError("network down")
+        monkeypatch.setattr("agents.analysis.tools._ncbi_get", mock_get)
+        result = fetch_geo_metadata("GSE245856")
+        assert result["error"] == "fetch_failed"
+
+
+class TestFetchAbstract:
+    def test_rejects_non_numeric(self):
+        result = fetch_abstract("not_a_number")
+        assert result["error"] == "bad_pmid"
+
+    def test_parses_xml(self, monkeypatch: pytest.MonkeyPatch):
+        xml_response = """<?xml version="1.0"?>
+        <PubmedArticleSet>
+        <PubmedArticle><MedlineCitation>
+        <Article>
+            <ArticleTitle>VPA induces neuronal genes</ArticleTitle>
+            <Abstract><AbstractText>VPA is an HDAC inhibitor that affects gene expression.</AbstractText></Abstract>
+            <AuthorList>
+                <Author><LastName>Smith</LastName><Initials>AB</Initials></Author>
+                <Author><LastName>Jones</LastName><Initials>CD</Initials></Author>
+            </AuthorList>
+            <Journal>
+                <Title>Nature Genetics</Title>
+                <JournalIssue><PubDate><Year>2024</Year></PubDate></JournalIssue>
+            </Journal>
+        </Article>
+        </MedlineCitation></PubmedArticle>
+        </PubmedArticleSet>"""
+
+        monkeypatch.setattr("agents.analysis.tools._ncbi_get", lambda url: xml_response)
+        result = fetch_abstract("12345678")
+        assert result["pmid"] == "12345678"
+        assert "VPA induces" in result["title"]
+        assert result["authors"] == ["Smith AB", "Jones CD"]
+        assert result["journal"] == "Nature Genetics"
+        assert result["year"] == "2024"
+        assert "HDAC inhibitor" in result["abstract"]
+
+    def test_handles_network_error(self, monkeypatch: pytest.MonkeyPatch):
+        import urllib.error
+        def mock_get(url):
+            raise urllib.error.URLError("timeout")
+        monkeypatch.setattr("agents.analysis.tools._ncbi_get", mock_get)
+        result = fetch_abstract("12345678")
+        assert result["error"] == "fetch_failed"
 
 
 class TestScanResults:
@@ -227,11 +321,37 @@ class TestRunEnrichment:
         assert "error" not in result
         assert "enrichment" in result
 
+    def test_label_accumulates(self, monkeypatch: pytest.MonkeyPatch):
+        import pandas as pd
+        import gseapy
+
+        mock_df = pd.DataFrame({
+            "Gene_set": ["GO_Biological_Process_2023"],
+            "Term": ["some term"],
+            "P-value": [0.001],
+            "Adjusted P-value": [0.01],
+            "Overlap": ["3/50"],
+            "Genes": ["A;B;C"],
+        })
+
+        class MockResult:
+            results = mock_df
+
+        monkeypatch.setattr(gseapy, "enrichr", lambda **kw: MockResult())
+        run_enrichment(["Gene1"], label="upregulated")
+        run_enrichment(["Gene2"], label="downregulated")
+        assert "upregulated" in SESSION.enrichment_results
+        assert "downregulated" in SESSION.enrichment_results
+        assert "results" in SESSION.enrichment_results["upregulated"]
+
 
 class TestSummarizeFindings:
     def test_returns_empty_when_nothing_loaded(self):
         result = summarize_findings()
         assert isinstance(result, dict)
+        assert "software_versions" in result
+        assert "python" in result["software_versions"]
+        assert "data_source" in result
 
     def test_includes_de_summary(self, count_matrix_tsv: Path, design_csv: Path):
         SESSION.begin_run("test")
@@ -241,6 +361,8 @@ class TestSummarizeFindings:
         result = summarize_findings()
         assert "de_summary" in result
         assert "n_significant" in result["de_summary"]
+        assert "numpy" in result["software_versions"]
+        assert "pandas" in result["software_versions"]
 
 
 class TestGenerateReport:
@@ -274,7 +396,7 @@ class TestGenerateReport:
         # de_heatmap only generated when there are significant genes (padj < 0.05);
         # synthetic data with 2 replicates may not produce any
 
-    def test_report_written_as_is(self, count_matrix_tsv: Path):
+    def test_report_written_with_disclaimer(self, count_matrix_tsv: Path):
         SESSION.begin_run("test")
         load_counts(str(count_matrix_tsv))
         md = "# My Report\n\n![PCA](figures/pca.png)\n\nSome text."
@@ -282,6 +404,15 @@ class TestGenerateReport:
         content = Path(result["report_path"]).read_text()
         assert "![PCA](figures/pca.png)" in content
         assert "## Figures" not in content
+        assert "Disclaimer" in content
+        assert "hallucination" in content.lower()
+
+    def test_returns_figure_paths(self, count_matrix_tsv: Path, design_csv: Path):
+        SESSION.begin_run("test")
+        load_counts(str(count_matrix_tsv), design_path=str(design_csv))
+        result = generate_report("# Report")
+        assert "figure_paths" in result
+        assert result["figure_paths"] == result["figures"]
 
 
 class TestScanResultsLooseFiles:

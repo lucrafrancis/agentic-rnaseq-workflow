@@ -12,6 +12,10 @@ react to.
 
 from __future__ import annotations
 
+import urllib.request
+import urllib.error
+import json as _json
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +32,127 @@ _QUANTILES = {"min": 0.0, "p25": 0.25, "median": 0.5, "p75": 0.75, "p95": 0.95, 
 def _quantile_summary(values) -> dict[str, float]:
     arr = np.asarray(values, dtype=float)
     return {name: round(float(np.quantile(arr, q)), 4) for name, q in _QUANTILES.items()}
+
+
+_NCBI_TIMEOUT = 15
+
+
+def _ncbi_get(url: str) -> str:
+    """Fetch a URL from NCBI with a short timeout."""
+    req = urllib.request.Request(url, headers={"User-Agent": "agentic-rnaseq-workflow/0.1"})
+    with urllib.request.urlopen(req, timeout=_NCBI_TIMEOUT) as resp:
+        return resp.read().decode("utf-8")
+
+
+def fetch_geo_metadata(accession: str) -> Summary:
+    """Fetch GEO series metadata via NCBI E-utilities.
+
+    Returns title, summary, organism, sample descriptions, and PubMed IDs.
+    The agent should call this early to understand the experimental context.
+    """
+    accession = accession.strip().upper()
+    if not accession.startswith("GSE"):
+        return {"error": "bad_accession", "message": "Only GSE accessions are supported."}
+
+    try:
+        search_url = (
+            f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
+            f"?db=gds&term={accession}[ACCN]&retmode=json"
+        )
+        search_data = _json.loads(_ncbi_get(search_url))
+        id_list = search_data.get("esearchresult", {}).get("idlist", [])
+        if not id_list:
+            return {"error": "not_found", "message": f"No GEO entry found for {accession}."}
+
+        geo_id = id_list[0]
+        summary_url = (
+            f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
+            f"?db=gds&id={geo_id}&retmode=json"
+        )
+        summary_data = _json.loads(_ncbi_get(summary_url))
+        record = summary_data.get("result", {}).get(str(geo_id), {})
+
+        samples = []
+        for s in record.get("samples", []):
+            samples.append({"accession": s.get("accession", ""), "title": s.get("title", "")})
+
+        return {
+            "accession": accession,
+            "title": record.get("title", ""),
+            "summary": record.get("summary", ""),
+            "organism": record.get("taxon", ""),
+            "n_samples": record.get("n_samples", len(samples)),
+            "samples": samples,
+            "pubmed_ids": record.get("pubmedids", []),
+            "platform": record.get("gpl", ""),
+        }
+    except (urllib.error.URLError, OSError, KeyError, _json.JSONDecodeError) as exc:
+        return {"error": "fetch_failed", "message": f"Could not fetch GEO metadata: {exc}"}
+
+
+def fetch_abstract(pmid: str) -> Summary:
+    """Fetch a PubMed abstract via NCBI E-utilities.
+
+    Returns title, authors, journal, year, and abstract text. The agent can use
+    this to cite the original paper and contextualise findings.
+    """
+    pmid = str(pmid).strip()
+    if not pmid.isdigit():
+        return {"error": "bad_pmid", "message": "PMID must be a numeric string."}
+
+    try:
+        url = (
+            f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
+            f"?db=pubmed&id={pmid}&retmode=xml"
+        )
+        xml_text = _ncbi_get(url)
+        root = ET.fromstring(xml_text)
+        article = root.find(".//PubmedArticle/MedlineCitation/Article")
+        if article is None:
+            return {"error": "not_found", "message": f"No PubMed article found for PMID {pmid}."}
+
+        title_el = article.find("ArticleTitle")
+        title = title_el.text if title_el is not None and title_el.text else ""
+
+        abstract_parts = []
+        abstract_el = article.find("Abstract")
+        if abstract_el is not None:
+            for part in abstract_el.findall("AbstractText"):
+                label = part.get("Label", "")
+                text = "".join(part.itertext()).strip()
+                if label:
+                    abstract_parts.append(f"{label}: {text}")
+                else:
+                    abstract_parts.append(text)
+
+        authors = []
+        author_list = article.find("AuthorList")
+        if author_list is not None:
+            for author in author_list.findall("Author"):
+                last = author.findtext("LastName", "")
+                initials = author.findtext("Initials", "")
+                if last:
+                    authors.append(f"{last} {initials}".strip())
+
+        journal_el = article.find("Journal")
+        journal = ""
+        year = ""
+        if journal_el is not None:
+            journal = journal_el.findtext("Title", "") or journal_el.findtext("ISOAbbreviation", "")
+            pub_date = journal_el.find("JournalIssue/PubDate")
+            if pub_date is not None:
+                year = pub_date.findtext("Year", "")
+
+        return {
+            "pmid": pmid,
+            "title": title,
+            "authors": authors[:10],
+            "journal": journal,
+            "year": year,
+            "abstract": "\n".join(abstract_parts) if abstract_parts else "",
+        }
+    except (urllib.error.URLError, OSError, ET.ParseError) as exc:
+        return {"error": "fetch_failed", "message": f"Could not fetch abstract: {exc}"}
 
 
 _COUNT_KEYWORDS = {"count", "counts", "gene_counts", "raw_counts", "featurecounts"}
@@ -527,11 +652,14 @@ def get_top_genes(n: int = 20, direction: str = "both") -> Summary:
     }
 
 
-def run_enrichment(gene_list: list[str], organism: str = "human") -> Summary:
+def run_enrichment(gene_list: list[str], organism: str = "human", label: str = "") -> Summary:
     """Run gene set enrichment via Enrichr (GO and KEGG).
 
     gene_list should contain gene symbols (not Ensembl IDs). Enrichr expects HGNC
     symbols for human, MGI symbols for mouse.
+
+    label distinguishes separate enrichment runs (e.g. "upregulated", "downregulated").
+    Results accumulate across calls — each label gets its own entry and plot.
     """
     if not gene_list:
         return {"error": "empty_gene_list", "message": "gene_list is empty."}
@@ -556,7 +684,6 @@ def run_enrichment(gene_list: list[str], organism: str = "human") -> Summary:
         return {"error": "enrichr_failed", "message": str(exc)}
 
     results_df = enr.results
-    SESSION.enrichment_results = {"organism": organism, "gene_sets": gene_sets}
 
     enrichment = {}
     for gs in gene_sets:
@@ -572,9 +699,19 @@ def run_enrichment(gene_list: list[str], organism: str = "human") -> Summary:
             for _, row in subset.iterrows()
         ]
 
-    SESSION.enrichment_results["results"] = enrichment
+    # Accumulate results across calls (keyed by label)
+    if SESSION.enrichment_results is None:
+        SESSION.enrichment_results = {}
+    label_key = label or "default"
+    SESSION.enrichment_results[label_key] = {
+        "organism": organism,
+        "gene_sets": gene_sets,
+        "results": enrichment,
+    }
+
     return {
         "organism": organism,
+        "label": label_key,
         "gene_sets_queried": gene_sets,
         "n_input_genes": len(gene_list),
         "enrichment": enrichment,
@@ -582,8 +719,17 @@ def run_enrichment(gene_list: list[str], organism: str = "human") -> Summary:
 
 
 def summarize_findings() -> Summary:
-    """Consolidate the final analysis state into one factual summary for the report."""
+    """Consolidate the final analysis state into one factual summary for the report.
+
+    Returns source type, methods metadata, and all accumulated results so the
+    agent has the facts it needs to write an accurate report.
+    """
     out: Summary = {}
+
+    # Data source (from scan_results)
+    out["data_source"] = "nf-core" if (
+        SESSION.results_dir and (SESSION.results_dir / "star_salmon").is_dir()
+    ) else "user-provided"
 
     if SESSION.counts_df is not None:
         out["n_genes"] = int(SESSION.counts_df.shape[0])
@@ -603,11 +749,23 @@ def summarize_findings() -> Summary:
             "n_down": int((sig["log2FoldChange"] < 0).sum()),
         }
 
-    if SESSION.enrichment_results and "results" in SESSION.enrichment_results:
+    if SESSION.enrichment_results:
         top_terms = {}
-        for gs, terms in SESSION.enrichment_results["results"].items():
-            top_terms[gs] = [t["term"] for t in terms[:5]]
+        for label, entry in SESSION.enrichment_results.items():
+            results = entry.get("results", {})
+            for gs, terms in results.items():
+                key = f"{label}:{gs}" if label != "default" else gs
+                top_terms[key] = [t["term"] for t in terms[:5]]
         out["top_enrichment_terms"] = top_terms
+
+    # Actual software versions for the Methods section
+    versions = {"python": __import__("sys").version.split()[0]}
+    for pkg in ("numpy", "pandas", "pydeseq2", "matplotlib", "scipy", "gseapy"):
+        try:
+            versions[pkg] = __import__(pkg).__version__
+        except (ImportError, AttributeError):
+            pass
+    out["software_versions"] = versions
 
     return out
 
@@ -876,26 +1034,52 @@ def generate_report(report_markdown: str) -> Summary:
             ax.spines["bottom"].set_visible(False)
             _save(fig, "de_heatmap.png")
 
-    # --- Enrichment bar plots ---
-    if SESSION.enrichment_results and "results" in SESSION.enrichment_results:
-        for gs, terms in SESSION.enrichment_results["results"].items():
-            if not terms:
-                continue
-            top = terms[:10]
-            fig, ax = plt.subplots(figsize=(9, max(3, len(top) * 0.4)))
-            term_names = [t["term"][:65] for t in reversed(top)]
-            pvals = [-np.log10(t["padj"]) if t["padj"] > 0 else 10 for t in reversed(top)]
-            ax.barh(term_names, pvals, color=_PALETTE[0], edgecolor="white", linewidth=0.5)
-            ax.set_xlabel("-log10(padj)", fontsize=11)
-            _style_ax(ax, gs.replace("_", " "))
-            fig_name = f"enrichment_{gs.lower().replace(' ', '_')}.png"
-            _save(fig, fig_name)
+    # --- Enrichment bar plots (one per label × gene set) ---
+    if SESSION.enrichment_results:
+        palette_idx = 0
+        for label, entry in SESSION.enrichment_results.items():
+            results = entry.get("results", {})
+            for gs, terms in results.items():
+                if not terms:
+                    continue
+                top = terms[:10]
+                fig, ax = plt.subplots(figsize=(9, max(3, len(top) * 0.4)))
+                term_names = [t["term"][:65] for t in reversed(top)]
+                pvals = [-np.log10(t["padj"]) if t["padj"] > 0 else 10 for t in reversed(top)]
+                color = _PALETTE[palette_idx % len(_PALETTE)]
+                ax.barh(term_names, pvals, color=color, edgecolor="white", linewidth=0.5)
+                ax.set_xlabel("-log10(padj)", fontsize=11)
+                title_label = label if label != "default" else ""
+                title_gs = gs.replace("_", " ")
+                plot_title = f"{title_gs} — {title_label}" if title_label else title_gs
+                _style_ax(ax, plot_title)
+                if label != "default":
+                    fig_name = f"enrichment_{label}_{gs.lower().replace(' ', '_')}.png"
+                else:
+                    fig_name = f"enrichment_{gs.lower().replace(' ', '_')}.png"
+                _save(fig, fig_name)
+            palette_idx += 1
+
+    # --- Build figure map for the agent ---
+    figure_map = {p.stem: f"figures/{p.name}" for p in figures}
+
+    # --- Append disclaimer (tool-enforced, not LLM-dependent) ---
+    disclaimer = (
+        "\n\n---\n\n"
+        "**Disclaimer:** This report was generated by an AI system. "
+        "Large language models can produce inaccurate statements (hallucinations). "
+        "All biological claims, gene annotations, pathway interpretations, and "
+        "cited references should be independently verified before use in "
+        "publications or clinical decisions."
+    )
+    report_text = report_markdown.rstrip() + disclaimer + "\n"
 
     # --- Write report ---
-    paths.analysis_report.write_text(report_markdown.rstrip() + "\n")
+    paths.analysis_report.write_text(report_text)
 
     return {
         "report_path": str(paths.analysis_report),
-        "figures": {p.stem: f"figures/{p.name}" for p in figures},
+        "figures": figure_map,
+        "figure_paths": {name: path for name, path in figure_map.items()},
         "n_figures": len(figures),
     }

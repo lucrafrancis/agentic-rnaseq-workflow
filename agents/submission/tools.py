@@ -107,6 +107,10 @@ def configure_submission(
             v = v.lower() == "true"
         clean[k] = v
 
+    # skip_alignment without a pseudo-aligner produces no counts — useless.
+    if clean.get("skip_alignment") and "pseudo_aligner" not in clean:
+        clean["pseudo_aligner"] = "salmon"
+
     params = SubmissionParams(
         input_samplesheet=str(paths.samplesheet),
         outdir=str(paths.dir / "results"),

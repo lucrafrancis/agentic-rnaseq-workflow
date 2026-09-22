@@ -13,14 +13,11 @@ __pycache__/
 # Data & run outputs (regenerated, not source)
 data/
 runs/
-examples/demo_fastqs/fastqs/
-examples/demo_fastqs/staged/
-examples/demo_fastqs/samplesheet.csv
-examples/nfcore_test/fastqs/
-examples/nfcore_test/samplesheet.csv
-examples/geo_test/fastqs/
-examples/geo_test/samplesheet.csv
-examples/geo_GSE157852/fastqs/
+examples/*/fastqs/
+examples/*/staged/
+examples/*/samplesheet.csv
+examples/*/counts.csv
+examples/*/results/
 
 # uv
 .uv/

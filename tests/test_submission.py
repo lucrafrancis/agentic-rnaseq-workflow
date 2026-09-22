@@ -143,6 +143,29 @@ class TestConfigureSubmission:
         assert saved["skip_alignment"] is True
         assert saved["max_memory"] == "16.GB"
 
+    def test_skip_alignment_forces_pseudo_aligner(self, tmp_path: Path):
+        SESSION.begin_run("test_configure_pseudo")
+        SESSION.require_paths().samplesheet.write_text("sample,fastq_1,fastq_2,strandedness\n")
+
+        configure_submission(
+            genome="GRCh38",
+            extra_params={"skip_alignment": True},
+        )
+        saved = json.loads(SESSION.require_paths().params_file.read_text())
+        assert saved["skip_alignment"] is True
+        assert saved["pseudo_aligner"] == "salmon"
+
+    def test_skip_alignment_respects_explicit_pseudo_aligner(self, tmp_path: Path):
+        SESSION.begin_run("test_configure_pseudo_explicit")
+        SESSION.require_paths().samplesheet.write_text("sample,fastq_1,fastq_2,strandedness\n")
+
+        configure_submission(
+            genome="GRCh38",
+            extra_params={"skip_alignment": True, "pseudo_aligner": "salmon"},
+        )
+        saved = json.loads(SESSION.require_paths().params_file.read_text())
+        assert saved["pseudo_aligner"] == "salmon"
+
     def test_coerces_string_booleans(self, tmp_path: Path):
         SESSION.begin_run("test_configure_coerce")
         SESSION.require_paths().samplesheet.write_text("sample,fastq_1,fastq_2,strandedness\n")

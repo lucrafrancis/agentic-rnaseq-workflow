@@ -13,6 +13,39 @@ from agents.analysis import tools
 
 TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
+        "name": "fetch_geo_metadata",
+        "description": "Fetch GEO series metadata via NCBI E-utilities. Returns title, "
+        "summary, organism, cell type, sample descriptions, and PubMed IDs. "
+        "Call this early if the prompt mentions a GEO accession — it provides "
+        "essential context (cell type, experimental design, associated paper).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "accession": {
+                    "type": "string",
+                    "description": "GEO series accession (e.g. GSE245856).",
+                },
+            },
+            "required": ["accession"],
+        },
+    },
+    {
+        "name": "fetch_abstract",
+        "description": "Fetch a PubMed abstract via NCBI E-utilities. Returns title, "
+        "authors, journal, year, and abstract text. Use this to get citable context "
+        "for the report — cite as (Author et al., Year; PMID: <id>).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "pmid": {
+                    "type": "string",
+                    "description": "PubMed ID (numeric string).",
+                },
+            },
+            "required": ["pmid"],
+        },
+    },
+    {
         "name": "scan_results",
         "description": "Scan a directory for analysis inputs: count matrices, design files, "
         "and MultiQC data. Detects both nf-core/rnaseq output structure and loose "
@@ -164,6 +197,12 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "type": "string",
                     "description": "Organism: 'human', 'mouse', or 'yeast' (default 'human').",
                 },
+                "label": {
+                    "type": "string",
+                    "description": "Label for this enrichment run, e.g. 'upregulated' or "
+                    "'downregulated'. Results accumulate across calls — each label gets "
+                    "its own figures (enrichment_<label>_<gene_set>.png).",
+                },
             },
             "required": ["gene_list"],
         },
@@ -171,17 +210,19 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "name": "summarize_findings",
         "description": "Consolidate the analysis state (QC, DE, enrichment) into one "
-        "factual summary to write the report from. Non-mutating.",
+        "factual summary including data source, software versions, and all results. "
+        "Use the returned software_versions for the Methods section — do not guess. "
+        "Non-mutating.",
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
         "name": "generate_report",
         "description": "Generate all analysis figures and write the Markdown report. "
-        "Figures are generated at known paths under figures/: pca.png, library_sizes.png, "
-        "sample_correlation.png, volcano.png, ma_plot.png, de_heatmap.png, "
-        "enrichment_*.png, pca_<variable>.png, pc_association.png. "
-        "Place figure references inline in the relevant report sections using "
-        "![caption](figures/<name>.png). The tool writes the report as-is. Call this last.",
+        "The returned 'figures' dict contains the EXACT figure paths generated — "
+        "use ONLY those paths in the report, do not invent filenames. "
+        "Enrichment figures are named enrichment_<label>_<gene_set>.png when a label "
+        "was used (e.g. enrichment_upregulated_go_biological_process_2023.png). "
+        "A hallucination disclaimer is appended automatically. Call this last.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -196,6 +237,8 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
 ]
 
 TOOL_FUNCTIONS: dict[str, Callable[..., dict[str, Any]]] = {
+    "fetch_geo_metadata": tools.fetch_geo_metadata,
+    "fetch_abstract": tools.fetch_abstract,
     "scan_results": tools.scan_results,
     "load_counts": tools.load_counts,
     "inspect_counts": tools.inspect_counts,
