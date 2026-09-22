@@ -18,10 +18,12 @@ The full flow in `run.py`: download agent (if needed) → human approves downloa
 ```bash
 uv run python run.py <prompt.txt>                # full pipeline (stages 0-3)
 uv run python run.py --resume <run_dir>          # resume from existing run directory
-uv run python run.py --analyze <results>         # analysis only (stage 3)
+uv run python run.py --analyze <run_dir>         # analysis only (stage 3)
 ```
 
 `--resume` skips stages whose artifacts already exist: `download_metadata.json` → skip download, `samplesheet.csv` → skip samplesheet agent, `params.json` → skip submission agent, `results/` non-empty → skip nextflow, go straight to analysis.
+
+`--analyze` attaches to an existing run directory (via `resume_run`), reads the original `prompt.txt` as context, and runs the analysis agent. Output goes into the same run dir (`analysis/`), not a new one. An optional interactive prompt lets the user add extra instructions (saved as `analysis_prompt.txt` if provided); Enter continues without them, "skip" aborts.
 
 The prompt file describes the data (FASTQ location, organism, metadata path, strandedness). See `examples/` for working prompts. Run directories are named `runs/<datestamp>_<project>/` (derived from prompt file's parent directory).
 
@@ -49,11 +51,12 @@ The prompt file describes the data (FASTQ location, organism, metadata path, str
 `fetch_geo_metadata` → `fetch_abstract` → `scan_results` → `load_counts` → `inspect_counts` → `set_design` (if needed) → `compute_qc` → `filter_low_counts` → `run_deseq2` → `get_top_genes` → `run_enrichment` → `summarize_findings` → `generate_report`
 
 - `fetch_geo_metadata` / `fetch_abstract` — NCBI E-utilities for GEO series metadata and PubMed abstracts. Provides cell type, organism, experimental context, and citable references. Called first when a GEO accession is in the prompt.
-- `inspect_counts` — detects whether data is raw counts vs normalised (TPM/FPKM/log). Prevents running DESeq2 on pre-normalised data.
+- `inspect_counts` — detects whether data is raw counts vs normalised (TPM/FPKM/log). Prevents running DESeq2 on pre-normalised data. Also flags Salmon fractional counts (`salmon_fractional: true`) so downstream tools know rounding is safe.
+- `run_deseq2` — rounds Salmon fractional counts to integers automatically (only when data looks like raw counts with minor fractional noise, not normalised). Reports `counts_rounded` and `pct_non_integer_before_rounding` in its return dict. Also returns `low_replication_warning` when any group has < 3 replicates — the agent must include this caveat in the report.
 - `save_design` (samplesheet agent) writes `design.csv` for traceability; `set_design` (analysis agent) is the fallback when none exists
 - `run_enrichment` takes a `label` param (e.g. "upregulated", "downregulated") — results accumulate across calls, each label gets its own figures
-- `summarize_findings` returns `software_versions` (real installed versions) and `data_source` ("nf-core" or "user-provided") to prevent hallucination in the Methods section
-- `generate_report` returns a `figures` dict with actual file paths — the LLM must use only those, not invent filenames. Appends a hallucination disclaimer automatically.
+- `summarize_findings` returns `software_versions` (real installed versions), `pipeline_versions` (parsed from nf-core's `nf_core_rnaseq_software_mqc_versions.yml` — exact Nextflow, pipeline, and Salmon versions), and `data_source` ("nf-core" or "user-provided") to prevent hallucination in the Methods section
+- `generate_report` returns a `figures` dict with actual file paths — the LLM must use only those, not invent filenames. Appends a hallucination disclaimer automatically (including a gene annotation verification caveat). Strips trailing `---` before appending to prevent doubling.
 - Enrichment uses gseapy/Enrichr (network call) — mocked in tests
 - PCA via numpy SVD on log2(counts+1), no scanpy dependency
 
