@@ -77,7 +77,12 @@ class SubmissionParams:
         entries = []
         for key, value in cfg.items():
             nf_key = key_map.get(key, key)
-            entries.append(f"        {nf_key}: {value}")
+            if isinstance(value, bool):
+                entries.append(f"        {nf_key}: {str(value).lower()}")
+            elif isinstance(value, (int, float)):
+                entries.append(f"        {nf_key}: {value}")
+            else:
+                entries.append(f"        {nf_key}: '{value}'")
         lines = [
             "process {",
             "    resourceLimits = [",

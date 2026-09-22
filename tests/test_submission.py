@@ -7,7 +7,8 @@ from pathlib import Path
 
 from agents.submission.errors import Diagnosis, diagnose_log, format_diagnoses
 from agents.submission.params import SubmissionParams, default_params
-from agents.submission.tools import configure_submission
+from agents.submission.tools import check_resources, configure_submission
+from agents.submission.troubleshoot import _run_safe_command
 from core.session import SESSION
 
 
@@ -181,3 +182,67 @@ class TestSchemaConsistency:
         for schemas, _ in self._all_schemas():
             names = [s["name"] for s in schemas]
             assert len(names) == len(set(names))
+
+
+class TestCheckResources:
+    def test_returns_structured_info(self):
+        result = check_resources()
+        assert "cpus" in result
+        assert "memory_gb" in result
+        assert "disk" in result
+        assert "docker" in result
+        assert result["cpus"] is None or result["cpus"] > 0
+        assert result["memory_gb"] is None or result["memory_gb"] > 0
+
+
+class TestRunSafeCommand:
+    def test_allowed_binary(self):
+        result = _run_safe_command("uname -s")
+        assert result["returncode"] == 0
+        assert result["stdout"]
+
+    def test_rejects_shell_metacharacters(self):
+        result = _run_safe_command("uname -s; rm -rf /")
+        assert result["error"] == "blocked"
+
+    def test_rejects_pipe(self):
+        result = _run_safe_command("cat /etc/passwd | grep root")
+        assert result["error"] == "blocked"
+
+    def test_rejects_subshell(self):
+        result = _run_safe_command("$(whoami)")
+        assert result["error"] == "blocked"
+
+    def test_rejects_disallowed_binary(self):
+        result = _run_safe_command("rm -rf /")
+        assert result["error"] == "blocked"
+        assert "not in the allowed" in result["message"]
+
+    def test_rejects_path_traversal(self):
+        result = _run_safe_command("/usr/bin/rm -rf /")
+        assert result["error"] == "blocked"
+
+    def test_empty_command(self):
+        result = _run_safe_command("")
+        assert result["error"] == "blocked"
+
+
+class TestWriteNfConfig:
+    def test_quotes_string_values(self, tmp_path: Path):
+        params = SubmissionParams(
+            extra_args={"max_memory": "30.GB", "max_cpus": 8, "max_time": "12.h"},
+        )
+        config_path = tmp_path / "custom.config"
+        params.write_nf_config(config_path)
+        content = config_path.read_text()
+        assert "'30.GB'" in content
+        assert "'12.h'" in content
+        assert "cpus: 8" in content
+
+    def test_integer_values_unquoted(self, tmp_path: Path):
+        params = SubmissionParams(extra_args={"max_cpus": 4})
+        config_path = tmp_path / "custom.config"
+        params.write_nf_config(config_path)
+        content = config_path.read_text()
+        assert "cpus: 4" in content
+        assert "'" not in content

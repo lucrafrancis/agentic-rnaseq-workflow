@@ -74,9 +74,9 @@ def _run_pipeline(prompt: str) -> None:
     """Run the full pipeline, skipping stages whose artifacts already exist."""
     paths = SESSION.require_paths()
 
-    # --- Stage 0: data download (if accession present and no FASTQ path given) ---
+    # --- Stage 0: data download (if accession present) ---
     accession = _extract_accession(prompt)
-    if accession and not _has_fastq_path(prompt):
+    if accession:
         if paths.download_metadata.is_file():
             print("Stage 0: download metadata exists, skipping download agent.")
         else:
@@ -113,6 +113,8 @@ def _run_pipeline(prompt: str) -> None:
             preview = samplesheet.read_text()
             print(f"Using edited sample sheet ({preview.count(chr(10)) - 1} samples).")
 
+    SESSION.mark_stage_complete("samplesheet")
+
     # --- Stage 2: submission configuration + pipeline run ---
     results_dir = paths.dir / "results"
     if results_dir.is_dir() and any(results_dir.iterdir()):
@@ -144,12 +146,6 @@ def _extract_accession(prompt: str) -> str | None:
     """Extract a GEO/SRA accession from the prompt text."""
     m = re.search(r"\b(GSE\d+|SRP\d+|ERP\d+|DRP\d+|PRJNA\d+)\b", prompt, re.IGNORECASE)
     return m.group(1) if m else None
-
-
-def _has_fastq_path(prompt: str) -> bool:
-    """Check if the prompt already specifies a FASTQ directory."""
-    lower = prompt.lower()
-    return "fastq" in lower and ("/" in lower or "path" in lower or "dir" in lower)
 
 
 def _download_stage(prompt: str) -> None:
@@ -192,8 +188,13 @@ def _download_stage(prompt: str) -> None:
     if not exec_result["success"]:
         sys.exit("Download failed. Check output above.")
 
+    output_dir = metadata.get("output_dir")
+    if not output_dir:
+        print("No output directory recorded in metadata. Skipping validation.")
+        return
+
     print("Validating checksums...")
-    val_result = validate_downloads(metadata["runs"], metadata["output_dir"])
+    val_result = validate_downloads(metadata["runs"], output_dir)
     if not val_result["all_valid"]:
         print("\n⚠️  Checksum validation failed:")
         for f in val_result["files"]:
@@ -202,6 +203,7 @@ def _download_stage(prompt: str) -> None:
         sys.exit(1)
 
     print(f"✓ All {val_result['n_pass']} file(s) validated (MD5).")
+    SESSION.mark_stage_complete("download")
 
 
 def _submit_with_troubleshooting(samplesheet_path: str) -> dict:

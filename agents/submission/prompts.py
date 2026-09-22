@@ -12,10 +12,9 @@ with the appropriate parameters.
 
 ## Before configuring
 
-Always use run_command to check the machine's available RAM and CPUs before calling
-configure_submission. Use whatever shell command is appropriate for the platform.
-Set max_memory below the available RAM to leave ~10% headroom (e.g. 36 GB RAM → '32.GB'),
-and set max_cpus to the available count.
+Always call check_resources first to see the machine's available RAM, CPUs, disk space,
+and Docker status. Set max_memory below the available RAM to leave ~10% headroom
+(e.g. 36 GB RAM → '32.GB'), and set max_cpus to the available count.
 
 STAR/RSEM alignment needs ~32 GB RAM for human — if the machine doesn't have enough,
 set skip_alignment: true to use salmon pseudo-alignment instead.
@@ -34,6 +33,6 @@ set skip_alignment: true to use salmon pseudo-alignment instead.
 - Do not guess parameters that aren't mentioned or implied by the prompt
 - When in doubt, leave defaults — nf-core has sensible ones
 
-Call run_command first to check resources, then configure_submission once with your
-chosen parameters. Briefly explain your reasoning before each tool call, then stop.
+Call check_resources first, then configure_submission once with your chosen parameters.
+Briefly explain your reasoning before each tool call, then stop.
 """

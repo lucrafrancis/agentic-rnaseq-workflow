@@ -11,21 +11,15 @@ from agents.submission import tools
 
 TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
-        "name": "run_command",
+        "name": "check_resources",
         "description": (
-            "Run a shell command on the machine and return stdout/stderr. "
-            "Use this to check system resources (RAM, CPUs, disk), inspect files, "
-            "or verify the environment before configuring the pipeline."
+            "Check the machine's available resources: RAM (GB), CPU count, "
+            "disk space, and Docker availability/memory. Call this before "
+            "configure_submission to set appropriate resource limits."
         ),
         "input_schema": {
             "type": "object",
-            "properties": {
-                "command": {
-                    "type": "string",
-                    "description": "The shell command to run.",
-                },
-            },
-            "required": ["command"],
+            "properties": {},
         },
     },
     {
@@ -81,6 +75,6 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
 ]
 
 TOOL_FUNCTIONS: dict[str, Callable[..., dict[str, Any]]] = {
-    "run_command": tools.run_command,
+    "check_resources": tools.check_resources,
     "configure_submission": tools.configure_submission,
 }

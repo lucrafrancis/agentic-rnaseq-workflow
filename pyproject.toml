@@ -13,7 +13,6 @@ dependencies = [
     "pydeseq2>=0.4",
     "matplotlib>=3.7",
     "gseapy>=1.0",
-    "anndata>=0.10",
 ]
 
 [build-system]

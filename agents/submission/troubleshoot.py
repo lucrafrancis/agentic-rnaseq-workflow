@@ -13,17 +13,66 @@ The LLM is only active during diagnosis — no tokens are burned while the pipel
 from __future__ import annotations
 
 import json
+import logging
+import re
+import shlex
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
 import anthropic
 
 from agents.submission.params import SubmissionParams
-from agents.submission.tools import run_command
 from core import config
 from core.session import SESSION
 
+logger = logging.getLogger(__name__)
+
 MAX_RETRIES = 3
+
+_ALLOWED_BINARIES = frozenset({
+    "cat", "df", "docker", "du", "env", "file", "free", "head",
+    "hostname", "id", "java", "ls", "lsb_release", "lscpu", "lsof",
+    "mount", "nextflow", "nproc", "ps", "sysctl", "tail", "top",
+    "uname", "wc", "which", "whoami",
+})
+
+_SHELL_METACHARACTERS = re.compile(r"[;|&`$(){}<>!\\]")
+
+
+def _run_safe_command(command: str) -> dict:
+    """Run a command after validating it against the binary allowlist.
+
+    Rejects shell metacharacters and commands whose binary isn't allowed.
+    """
+    command = command.strip()
+    if _SHELL_METACHARACTERS.search(command):
+        msg = f"Rejected: shell metacharacters not allowed in command: {command!r}"
+        logger.warning(msg)
+        return {"error": "blocked", "message": msg}
+
+    try:
+        parts = shlex.split(command)
+    except ValueError as exc:
+        return {"error": "blocked", "message": f"Could not parse command: {exc}"}
+
+    if not parts:
+        return {"error": "blocked", "message": "Empty command."}
+
+    binary = Path(parts[0]).name
+    if binary not in _ALLOWED_BINARIES:
+        msg = f"Rejected: '{binary}' is not in the allowed binary list."
+        logger.warning(msg)
+        return {"error": "blocked", "message": msg}
+
+    result = subprocess.run(
+        parts, capture_output=True, text=True, timeout=30,
+    )
+    return {
+        "stdout": result.stdout.strip(),
+        "stderr": result.stderr.strip(),
+        "returncode": result.returncode,
+    }
 
 _SYSTEM_PROMPT = """\
 You are an expert nf-core/rnaseq troubleshooter. A pipeline run has failed and you
@@ -224,7 +273,7 @@ def diagnose_and_propose(
                 if block.type != "tool_use":
                     continue
                 if block.name == "check_environment":
-                    result = run_command(block.input["command"])
+                    result = _run_safe_command(block.input["command"])
                     print(f"\n🔧 check_environment({block.input['command']})")
                     tool_results.append({
                         "type": "tool_result",
