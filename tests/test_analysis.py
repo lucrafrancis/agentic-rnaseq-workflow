@@ -1093,3 +1093,61 @@ class TestReplayScript:
         assert SESSION.require_paths().name.endswith("original_replay")
         replayed = pd.read_csv(SESSION.require_paths().de_results, index_col=0)
         pd.testing.assert_frame_equal(original, replayed)
+
+
+def _report_parts() -> str:
+    """Everything write_report requires, for tests that only vary one section."""
+    required = "".join(f"{{{{table:{t}}}}}\n\n" for t in tools._required_tables())
+    return required + _figs()
+
+
+class TestEvidenceTools:
+    def _ready(self, tmp_path, monkeypatch):
+        _analysed(tmp_path)
+        _mock_enrichr(monkeypatch)
+        run_enrichment("up")
+        run_enrichment("down")
+
+    def test_query_genes_by_symbol_and_family(self, tmp_path, monkeypatch):
+        self._ready(tmp_path, monkeypatch)
+        result = tools.query_genes(symbols=["gene5", "Gene45", "NOPE"], prefix="Gene2")
+        status = {g["gene"]: g["status"] for g in result["genes"]}
+        assert status == {"Gene5": "up", "Gene45": "down"}
+        assert result["not_found"] == {"NOPE": "not in the data (check the symbol)"}
+        family = result["family"]
+        assert family["n_genes"] == 111 and family["n_up"] == 11 and family["n_down"] == 0
+        assert family["cite_as"] == "{{genes:Gene2*}}"
+        assert tools._render_gene_family("Gene2*") == "Gene2* genes: 11 of 111 significant (11 up, 0 down)"
+
+    def test_search_enrichment_beyond_top_terms(self, tmp_path, monkeypatch):
+        self._ready(tmp_path, monkeypatch)
+        result = tools.search_enrichment("pathway", direction="up")
+        (match,) = result["matches"]
+        assert match["term"] == "Pathway X" and match["rank_in_library"] == 1
+        assert match["genes"] == ["Gene3"] and match["cite_as"] == "{{term:up:Pathway X}}"
+        assert tools._render_term("up:pathway x") == "Pathway X (3/40 genes, padj 0.020)"
+        assert tools._render_term("up:Not a term") is None
+
+    def test_paper_genes_table(self, tmp_path, monkeypatch):
+        self._ready(tmp_path, monkeypatch)
+        SESSION.references["123"] = {"title": "T", "authors": ["Doe J"], "year": "2024",
+                                     "abstract": "KO raised Gene5 and lowered Gene45; HE cells kept Gene250. gene7 no."}
+        rows = {r["gene"]: r["result"] for r in summarize_findings()["paper_genes"]}
+        assert rows == {"Gene5": "up", "Gene45": "down", "Gene250": "not significant"}
+        generate_figures()
+        assert "paper_genes" in tools._required_tables()
+        content = Path(write_report("# R\n\n" + _report_parts())["report_path"]).read_text()
+        assert "| Gene5 | 123 |" in content
+
+    def test_interpretation_must_be_short_and_anchored(self, tmp_path, monkeypatch):
+        self._ready(tmp_path, monkeypatch)
+        generate_figures()
+        bare = write_report(_report_parts() + "## Biological Interpretation\n\n"
+                            "{{gene:Gene5}} rises.\n\nThis is a hallmark of everything.\n")
+        assert "points at no result" in bare["message"] and "hallmark" in bare["message"]
+        long = write_report(_report_parts() + "## Biological Interpretation\n\n{{gene:Gene5}} " + "word " * 260)
+        assert "keep it to 250" in long["message"]
+        good = write_report(_report_parts() + "## Biological Interpretation\n\n"
+                            "{{gene:Gene5}} rises.\n\n- {{genes:Gene2*}}\n- {{term:up:Pathway X}}\n")
+        content = Path(good["report_path"]).read_text()
+        assert "Gene2* genes: 11 of 111 significant" in content and "Pathway X (3/40 genes" in content

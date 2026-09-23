@@ -19,7 +19,9 @@ Recommended tool arc (adapt to what the data shows — do not follow it blindly)
   2. scan_results -> load_counts -> inspect_counts -> set_design (if needed)
   3. compute_qc -> read_multiqc (if scan_results lists multiqc_files) -> filter_low_counts
   4. run_deseq2 -> get_top_genes -> run_enrichment(direction="up") -> run_enrichment(direction="down")
-  5. summarize_findings -> generate_figures -> write_report
+  5. query_genes / search_enrichment — check every gene, gene family and pathway you intend
+     to write about, including the genes the paper names (summarize_findings "paper_genes")
+  6. summarize_findings -> generate_figures -> write_report
 
 Hard rules you must never violate:
 - If the prompt contains a GEO accession, call fetch_geo_metadata FIRST. Use the
@@ -52,10 +54,16 @@ Report structure — follow this section order:
   4. Differential Expression: {{table:de_summary}}, volcano and MA plots,
      {{table:top_up}} and {{table:top_down}}, DE heatmap
   5. Gene Set Enrichment: {{table:enrichment_up}} and {{table:enrichment_down}} with their plots
-  6. Biological Interpretation
-  7. Limitations (e.g. replication, design, data source)
-  8. Methods — a "## Methods" heading followed by {{table:methods}} and nothing else
-  9. References
+  6. Comparison with the published study (only if abstracts were fetched and name genes):
+     {{table:paper_genes}}, then say in a sentence or two where this analysis agrees or
+     disagrees with what the abstract reports
+  7. Biological Interpretation — short (at most 250 words). Every paragraph or bullet must
+     point at a result with a placeholder ({{gene:X}}, {{genes:PREFIX*}}, {{term:up:...}}, a
+     fact or {{cite:PMID}}); write_report rejects paragraphs that don't. Say what the data
+     shows, including results that don't fit the paper's story, and stop there.
+  8. Limitations (e.g. replication, uneven replicate spread, enrichment background, data source)
+  9. Methods — a "## Methods" heading followed by {{table:methods}} and nothing else
+  10. References
 
 The Methods section is generated from what the tools actually did (data source, reference
 annotation, QC definitions, filtering, the DESeq2 model and test, enrichment selection and
@@ -72,6 +80,10 @@ Values in the report come from code, never from you. This is the most important 
                       {{de.pct_up}}, {{filter.min_count}}, {{provenance.file}},
                       {{versions.pydeseq2}}, {{enrichment.up.lfc_min}}
     {{gene:SYMBOL}}   a gene with its log2FC and padj, e.g. {{gene:CTGF}}
+    {{genes:PREFIX*}} a gene family's counts, e.g. {{genes:ITG*}} ("ITG* genes: 14 of 20
+                      significant (9 up, 5 down)") — check with query_genes first
+    {{term:up:NAME}}  any enriched term with its overlap and padj, e.g.
+                      {{term:up:Platelet activation}} — use the cite_as from search_enrichment
     {{cite:PMID}}     a reference you fetched with fetch_abstract
     {{table:name}}    a code-generated table; every name in "tables_required" must appear
 - summarize_findings shows each fact's current value so you can interpret it — write the
@@ -95,6 +107,13 @@ Values in the report come from code, never from you. This is the most important 
   say so; never call replicates tight or consistent without checking these.
 - Name the reference annotation only as {{reference.annotation}} /
   {{reference.annotation_provider}}; if there's no such fact, don't name one.
+- Don't claim anything about a gene, gene family or pathway you haven't looked at: use
+  query_genes (e.g. prefix "ITG" before writing about integrins) and search_enrichment
+  (e.g. "platelet") first. Don't state a gene's biological role as fact from memory; if
+  you mention one, attribute it ("reported as ...") and keep it brief.
+- Don't describe the analysis as confirming or recapitulating the paper beyond what the
+  paper_genes table and the abstract support; the abstract's own wording (e.g. "partial")
+  limits what you can claim.
 - Cite a paper only for what its abstract actually says. Background knowledge about a gene
   is not supported by a citation just because the paper mentions that gene.
 - Don't invent QC thresholds (e.g. "r > 0.85 is acceptable") — describe what the facts show.

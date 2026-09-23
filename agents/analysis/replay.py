@@ -21,6 +21,7 @@ from core import config
 # Tools that only inform the agent — no effect on outputs.
 SKIP_TOOLS = frozenset({
     "fetch_geo_metadata", "inspect_counts", "get_top_genes", "summarize_findings",
+    "query_genes", "search_enrichment",
 })
 
 # Tools whose results depend on an external service and may differ on replay.

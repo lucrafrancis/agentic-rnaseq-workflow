@@ -205,6 +205,37 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "query_genes",
+        "description": "DE results for any genes: a list of symbols, and/or every gene whose "
+        "symbol starts with a prefix (a gene family, e.g. 'ITG' for integrins, 'COL' for "
+        "collagens, 'MCM'). Returns log2FC, padj and up/down/not significant for each, plus "
+        "family counts. Use it before any claim about a gene or gene family that isn't in a "
+        "table you were given. Requires run_deseq2.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "symbols": {"type": "array", "items": {"type": "string"}, "description": "Gene symbols."},
+                "prefix": {"type": "string", "description": "Symbol prefix for a gene family."},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "search_enrichment",
+        "description": "Search all enriched terms (not only the top 10) for a word, e.g. "
+        "'platelet', 'hematopoietic', 'angiogenesis'. Returns each match's rank, overlap, padj "
+        "and the genes behind it. Use it to check a pathway claim. Requires run_enrichment.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Word or phrase to find in term names."},
+                "direction": {"type": "string", "enum": ["up", "down"],
+                              "description": "Only up- or down-regulated results (default: both)."},
+            },
+            "required": ["query"],
+        },
+    },
+    {
         "name": "run_enrichment",
         "description": "Over-representation analysis via Enrichr (GO Biological Process + KEGG) "
         "for one direction. The tool selects the genes itself from the DESeq2 results — you never "
@@ -292,6 +323,8 @@ TOOL_FUNCTIONS: dict[str, Callable[..., dict[str, Any]]] = {
     "filter_low_counts": tools.filter_low_counts,
     "run_deseq2": tools.run_deseq2,
     "get_top_genes": tools.get_top_genes,
+    "query_genes": tools.query_genes,
+    "search_enrichment": tools.search_enrichment,
     "run_enrichment": tools.run_enrichment,
     "summarize_findings": tools.summarize_findings,
     "generate_figures": tools.generate_figures,

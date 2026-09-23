@@ -153,7 +153,8 @@ def fetch_abstract(pmid: str) -> Summary:
             if pub_date is not None:
                 year = pub_date.findtext("Year", "")
 
-        SESSION.references[pmid] = {"title": title, "authors": authors, "journal": journal, "year": year}
+        SESSION.references[pmid] = {"title": title, "authors": authors, "journal": journal, "year": year,
+                                    "abstract": "\n".join(abstract_parts)}
         return {
             "pmid": pmid,
             "title": title,
@@ -784,6 +785,142 @@ def get_top_genes(n: int = 20, direction: str = "both") -> Summary:
     }
 
 
+def _gene_labels() -> pd.Series:
+    """Display symbol for every gene in the DESeq2 results, indexed by gene ID."""
+    res = SESSION.deseq_results
+    return pd.Series([_gene_label(g) for g in res.index], index=res.index)
+
+
+def _gene_status(row) -> str:
+    if pd.isna(row["padj"]):
+        return "not tested (removed by independent filtering)"
+    if row["padj"] >= _DE_PADJ:
+        return "not significant"
+    return "up" if row["log2FoldChange"] > 0 else "down"
+
+
+def query_genes(symbols: list[str] | None = None, prefix: str | None = None) -> Summary:
+    """DE results for any genes: a list of symbols, or every gene whose symbol starts with
+    a prefix (a gene family, e.g. "ITG" for integrins). Check a gene or family here before
+    making a claim about it."""
+    if SESSION.deseq_results is None:
+        return {"error": "no_deseq_results", "message": "Call run_deseq2 before query_genes."}
+    if not symbols and not prefix:
+        return {"error": "nothing_to_query", "message": "Pass symbols, a prefix, or both."}
+    res, labels = SESSION.deseq_results, _gene_labels()
+    loaded = set(SESSION.gene_names.dropna().astype(str)) if SESSION.gene_names is not None else set()
+
+    def row(gene_id) -> dict[str, Any]:
+        r = res.loc[gene_id]
+        return {"gene": labels[gene_id], "log2FC": round(float(r["log2FoldChange"]), 3),
+                "padj": None if pd.isna(r["padj"]) else float(r["padj"]),
+                "baseMean": round(float(r["baseMean"]), 1), "status": _gene_status(r)}
+
+    out: Summary = {}
+    if symbols:
+        found, missing = [], {}
+        for sym in symbols:
+            hits = labels.index[labels.str.upper() == str(sym).upper()]
+            if len(hits):
+                found += [row(g) for g in hits]
+            else:
+                missing[sym] = ("filtered out before DE (low counts)" if sym in loaded or sym in SESSION.counts_df.index
+                                else "not in the data (check the symbol)")
+        out["genes"] = found
+        out["cite_as"] = "{{gene:SYMBOL}} for each gene"
+        if missing:
+            out["not_found"] = missing
+    if prefix:
+        family = labels.index[labels.str.upper().str.startswith(prefix.upper())]
+        rows = sorted((row(g) for g in family), key=lambda r: (r["padj"] is None, r["padj"] or 1.0))
+        statuses = pd.Series([r["status"] for r in rows], dtype=str)
+        out["family"] = {
+            "prefix": prefix,
+            "n_genes": len(rows),
+            "n_up": int((statuses == "up").sum()),
+            "n_down": int((statuses == "down").sum()),
+            "n_not_significant": int((statuses == "not significant").sum()),
+            "genes": rows[:100],
+            "truncated": len(rows) > 100,
+            "cite_as": f"{{{{genes:{prefix}*}}}}",
+        }
+    return out
+
+
+def _enrichment_table(label: str) -> pd.DataFrame | None:
+    """Enrichr's full results for one direction, as saved by run_enrichment."""
+    path = SESSION.require_paths().analysis_dir / f"enrichment_{label}.csv"
+    return pd.read_csv(path) if path.is_file() else None
+
+
+def search_enrichment(query: str, direction: str | None = None) -> Summary:
+    """Search every enriched term (not only the top 10) for a word, e.g. "platelet" or
+    "hematopoietic", with its rank, statistics and the genes behind it."""
+    labels = {"up": ["upregulated"], "down": ["downregulated"], None: ["upregulated", "downregulated"]}
+    if direction not in labels:
+        return {"error": "bad_direction", "message": "direction must be 'up', 'down' or omitted."}
+    matches = []
+    for label in labels[direction]:
+        table = _enrichment_table(label)
+        if table is None:
+            continue
+        for gs, sub in table.groupby("Gene_set"):
+            sub = sub.sort_values("Adjusted P-value").reset_index(drop=True)
+            for rank, r in sub.iterrows():
+                if query.lower() in str(r["Term"]).lower():
+                    genes = str(r["Genes"]).split(";")
+                    matches.append({
+                        "direction": "up" if label == "upregulated" else "down",
+                        "library": gs, "term": r["Term"], "rank_in_library": rank + 1,
+                        "overlap": r["Overlap"], "padj": float(r["Adjusted P-value"]),
+                        "genes": genes[:50], "n_genes": len(genes),
+                        "cite_as": f"{{{{term:{'up' if label == 'upregulated' else 'down'}:{r['Term']}}}}}",
+                    })
+    if not matches and not any(_enrichment_table(l) is not None for l in labels[direction]):
+        return {"error": "no_enrichment", "message": "Call run_enrichment first."}
+    matches.sort(key=lambda m: m["padj"])
+    return {"query": query, "n_matches": len(matches), "matches": matches[:20]}
+
+
+def _abstract_genes() -> list[tuple[str, list[str]]]:
+    """Gene symbols named in the fetched abstracts, with the PMIDs naming them, in the
+    order they first appear. Only exact matches to genes in the loaded data count, and
+    only all-caps or digit-containing words (so ordinary words aren't taken for genes)."""
+    if not SESSION.references or SESSION.counts_df is None:
+        return []
+    universe = set(map(str, SESSION.counts_df.index))
+    if SESSION.gene_names is not None:
+        universe |= set(SESSION.gene_names.dropna().astype(str))
+    found: dict[str, list[str]] = {}
+    for pmid, ref in SESSION.references.items():
+        for token in re.findall(r"[A-Za-z0-9][A-Za-z0-9-]*[A-Za-z0-9]", ref.get("abstract") or ""):
+            if token in universe and (token.isupper() or any(c.isdigit() for c in token)):
+                found.setdefault(token, [])
+                if pmid not in found[token]:
+                    found[token].append(pmid)
+    return list(found.items())
+
+
+def _paper_genes() -> list[dict[str, str]]:
+    """This analysis's result for every gene the fetched abstracts name."""
+    if SESSION.deseq_results is None:
+        return []
+    res, labels = SESSION.deseq_results, _gene_labels()
+    rows = []
+    for symbol, pmids in _abstract_genes():
+        hits = labels.index[labels == symbol]
+        if len(hits) == 0:
+            hits = [g for g in res.index if str(g) == symbol]
+        base = {"gene": symbol, "pmids": ", ".join(pmids)}
+        if len(hits) == 0:
+            rows.append({**base, "log2FC": "", "padj": "", "result": "filtered out before DE (low counts)"})
+            continue
+        r = res.loc[hits[0]]
+        rows.append({**base, "log2FC": f"{r['log2FoldChange']:.2f}",
+                     "padj": "" if pd.isna(r["padj"]) else _fmt_p(r["padj"]), "result": _gene_status(r)})
+    return rows
+
+
 def run_enrichment(
     direction: str,
     padj_max: float = _DE_PADJ,
@@ -953,6 +1090,9 @@ def summarize_findings() -> Summary:
                 key = f"{label}:{gs}" if label != "default" else gs
                 top_terms[key] = [t["term"] for t in terms[:5]]
         out["top_enrichment_terms"] = top_terms
+
+    if (paper := _paper_genes()):
+        out["paper_genes"] = paper
 
     versions = _software_versions()
     pipeline = _pipeline_versions()
@@ -1392,6 +1532,12 @@ def _tables() -> dict[str, str]:
         t[name] = _md_table(["Library", "Term", "Overlap", "padj"], rows) if rows else "_No enriched terms returned._"
     versions = {**_software_versions(), **{f"nf-core: {k}": v for k, v in _pipeline_versions().items()}}
     t["versions"] = _md_table(["Software", "Version"], [[k, v] for k, v in versions.items()])
+    if (paper := _paper_genes()):
+        t["paper_genes"] = _md_table(
+            ["Gene", "Named in (PMID)", "log2FC", "padj", "This analysis"],
+            [[r["gene"], r["pmids"], r["log2FC"], r["padj"], r["result"]] for r in paper],
+        ) + ("\n\n*Genes named in the fetched abstract(s), with this analysis's result "
+             f"({SESSION.deseq_contrast[1]} vs {SESSION.deseq_contrast[2]}).*")
     if SESSION.counts_df is not None:
         t["methods"] = _methods()
     return t
@@ -1402,6 +1548,8 @@ def _required_tables() -> list[str]:
     req = ["methods"] if SESSION.counts_df is not None else []
     if SESSION.deseq_results is not None:
         req += ["de_summary", "top_up", "top_down"]
+    if _paper_genes():
+        req.append("paper_genes")
     for label in SESSION.enrichment_results or {}:
         req.append({"upregulated": "enrichment_up", "downregulated": "enrichment_down"}.get(label, f"enrichment_{_key(label)}"))
     return req
@@ -1771,6 +1919,48 @@ _HEADING = re.compile(r"^(#{1,6})\s+(.*)$", re.MULTILINE)
 _METHODS_ONLY = re.compile(r"\{\{\s*table:(methods|versions)\s*\}\}")
 
 
+_INTERPRETATION_MAX_WORDS = 250
+
+
+def _sections(report_markdown: str, title: str) -> list[tuple[str, str]]:
+    """(heading, body) for each section whose heading matches title (a regex); the body
+    runs to the next heading of the same or a higher level."""
+    headings = list(_HEADING.finditer(report_markdown))
+    out = []
+    for i, h in enumerate(headings):
+        if re.match(rf"(\d+\.?\s*)?({title})\b", h.group(2).strip(), re.IGNORECASE):
+            level = len(h.group(1))
+            end = next((n.start() for n in headings[i + 1:] if len(n.group(1)) <= level), len(report_markdown))
+            out.append((h.group(0).strip(), report_markdown[h.end():end]))
+    return out
+
+
+def _interpretation_problems(report_markdown: str) -> list[str]:
+    """Biological Interpretation stays short, and every paragraph or list item points at
+    a result through a placeholder, so claims are tied to evidence."""
+    problems = []
+    for heading, body in _sections(report_markdown, "biological interpretation|interpretation|discussion"):
+        units, para = [], []
+        for line in body.splitlines() + [""]:
+            text = line.strip()
+            if re.match(r"([-*+]|\d+\.)\s", text) or not text or text.startswith(("#", "|", "![")):
+                if para:
+                    units.append(" ".join(para))
+                para = []
+                if re.match(r"([-*+]|\d+\.)\s", text):
+                    para = [text]
+                continue
+            para.append(text)
+        words = len(_PLACEHOLDER.sub("X", body).split())
+        if words > _INTERPRETATION_MAX_WORDS:
+            problems.append(f"'{heading}' has {words} words; keep it to {_INTERPRETATION_MAX_WORDS}.")
+        bare = [u for u in units if not _PLACEHOLDER.search(u)]
+        problems += [f"'{heading}': this paragraph points at no result — anchor it with a {{{{gene:}}}}, "
+                     f"{{{{genes:PREFIX*}}}}, {{{{term:...}}}}, fact or {{{{cite:}}}} placeholder, or drop it: "
+                     f"\"{u[:80]}...\"" for u in bare]
+    return problems
+
+
 def _methods_prose(report_markdown: str) -> list[str]:
     """Headings of Methods sections that contain anything besides {{table:methods}}."""
     headings = list(_HEADING.finditer(report_markdown))
@@ -1804,6 +1994,32 @@ def _render_gene(query: str) -> str | None:
     row = res.loc[gene_id]
     padj = "n/a (not tested)" if pd.isna(row["padj"]) else _fmt_p(row["padj"])
     return f"{_gene_label(gene_id)} (log2FC {row['log2FoldChange']:.2f}, padj {padj})"
+
+
+def _render_gene_family(pattern: str) -> str | None:
+    if SESSION.deseq_results is None or not pattern.endswith("*") or len(pattern) < 2:
+        return None
+    labels = _gene_labels()
+    family = SESSION.deseq_results.loc[labels.index[labels.str.upper().str.startswith(pattern[:-1].upper())]]
+    if family.empty:
+        return None
+    status = family.apply(_gene_status, axis=1)
+    n_up, n_down = int((status == "up").sum()), int((status == "down").sum())
+    return (f"{pattern} genes: {n_up + n_down} of {len(family)} significant "
+            f"({n_up} up, {n_down} down)")
+
+
+def _render_term(arg: str) -> str | None:
+    direction, _, term = arg.partition(":")
+    label = {"up": "upregulated", "down": "downregulated"}.get(direction)
+    table = _enrichment_table(label) if label else None
+    if table is None:
+        return None
+    hits = table[table["Term"].str.lower() == term.strip().lower()]
+    if hits.empty:
+        return None
+    r = hits.sort_values("Adjusted P-value").iloc[0]
+    return f"{r['Term']} ({r['Overlap']} genes, padj {_fmt_p(r['Adjusted P-value'])})"
 
 
 def _render_cite(pmid: str) -> str | None:
@@ -1859,6 +2075,8 @@ def write_report(report_markdown: str) -> Summary:
             return f"\n\n{tables[arg]}\n\n"
         rendered = (facts.get(key) if not arg else
                     _render_gene(arg) if kind == "gene" else
+                    _render_gene_family(arg) if kind == "genes" else
+                    _render_term(arg) if kind == "term" else
                     _render_cite(arg) if kind == "cite" else None)
         if rendered is None:
             problems.append(f"unknown placeholder: {{{{{key}}}}}")
@@ -1881,6 +2099,7 @@ def write_report(report_markdown: str) -> Summary:
     problems += [f"'{h}' must contain only {{{{table:methods}}}} — the Methods section is generated from "
                  "what the tools did. Move other text (e.g. why a covariate was dropped) to Limitations "
                  "or the relevant results section." for h in _methods_prose(report_markdown)]
+    problems += _interpretation_problems(report_markdown)
     report = _BARE_IMAGE.sub(_bare_image, report_markdown)
     report = _IMAGE_LINK.sub(_figure, report)
     report = _PLACEHOLDER.sub(_placeholder, report)
