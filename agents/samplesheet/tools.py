@@ -87,6 +87,10 @@ def scan_fastqs(directory: str) -> Summary:
         if p.is_file() and any(p.name.endswith(ext) for ext in _FASTQ_EXTENSIONS):
             fastqs.append(str(p.resolve()))
 
+    from core.session import SESSION
+    SESSION.fastq_files = fastqs
+    SESSION.fastq_pairs = {}
+
     return {
         "directory": str(dirpath),
         "n_files": len(fastqs),
@@ -122,20 +126,39 @@ def read_metadata(filepath: str) -> Summary:
     }
 
 
-def match_pairs(fastq_list: list[str]) -> Summary:
-    """Match FASTQ files into R1/R2 pairs by filename pattern.
+def match_pairs() -> Summary:
+    """Match the FASTQs from the last scan_fastqs into R1/R2 pairs by filename pattern.
 
-    Groups files by sample prefix, pairing _R1/_R2 (or _1/_2) suffixes. Reports
-    matched pairs, unpaired files, and any ambiguous matches.
+    Every pair, incomplete pair and unpaired file gets a pair_id; the tools keep the
+    paths, and draft_samplesheet refers to them by pair_id only.
+    """
+    from core.session import SESSION
+
+    if not SESSION.fastq_files:
+        return {"error": "no_fastqs", "message": "No FASTQs scanned. Call scan_fastqs first."}
+    result = _match_pairs(SESSION.fastq_files)
+    SESSION.fastq_pairs = {
+        e["pair_id"]: {k: e[k] for k in ("fastq_1", "fastq_2") if k in e}
+        for e in result["matched"] + result["incomplete"] + result["unpaired"]
+    }
+    return result
+
+
+def _match_pairs(fastq_list: list[str]) -> Summary:
+    """Pair FASTQ paths by filename: _R1/_R2 (or _1/_2) with a shared prefix.
+
+    Pairs are keyed by the filename prefix (e.g. SRR26539594, or sampleA_S1_L001 for one
+    lane); 'sample' is the prefix with Illumina _S<n>_L<nnn> removed, a suggested name.
+    Unpaired files keep their filename as pair_id and are treated as single-end.
     """
     pairs: dict[str, dict[str, str]] = {}
-    unpaired: list[str] = []
+    unpaired: list[dict[str, str]] = []
 
     for fq in fastq_list:
         name = Path(fq).name
         m = _PAIR_PATTERN.match(name)
         if not m:
-            unpaired.append(fq)
+            unpaired.append({"pair_id": name, "fastq_1": fq})
             continue
 
         prefix = m.group("prefix")
@@ -146,19 +169,18 @@ def match_pairs(fastq_list: list[str]) -> Summary:
             pairs[prefix] = {"sample": sample}
         key = f"fastq_{read_num}"
         if key in pairs[prefix]:
-            unpaired.append(fq)
+            unpaired.append({"pair_id": name, "fastq_1": fq})
         else:
             pairs[prefix][key] = fq
 
     matched = []
     incomplete = []
     for prefix, reads in sorted(pairs.items()):
-        sample = reads.get("sample", prefix)
-        fq_reads = {k: v for k, v in reads.items() if k != "sample"}
-        if "fastq_1" in fq_reads and "fastq_2" in fq_reads:
-            matched.append({"sample": sample, **fq_reads})
+        entry = {"pair_id": prefix, **reads}
+        if "fastq_1" in reads and "fastq_2" in reads:
+            matched.append(entry)
         else:
-            incomplete.append({"sample": sample, **fq_reads})
+            incomplete.append(entry)
 
     return {
         "n_matched_pairs": len(matched),
@@ -170,61 +192,80 @@ def match_pairs(fastq_list: list[str]) -> Summary:
     }
 
 
-def draft_samplesheet(matches: list[dict], metadata: dict | None = None) -> Summary:
-    """Draft an nf-core/rnaseq sample sheet from matched pairs and optional metadata.
+def draft_samplesheet(samples: list[dict]) -> Summary:
+    """Draft an nf-core/rnaseq sample sheet from pair IDs chosen by the agent.
 
-    Produces the CSV content with columns: sample, fastq_1, fastq_2, strandedness.
-    Strandedness defaults to 'auto' unless metadata provides it. Returns a preview
-    of the first 10 rows, the full CSV content, and summary stats.
+    Each entry is {"pair_id", "sample", "strandedness"?}; the FASTQ paths are looked up
+    from match_pairs, never taken from the LLM. Several pair_ids may share a sample name
+    (lanes of one sample). Unknown or repeated pair_ids reject the whole draft. The CSV
+    is stored as the session draft (resetting validation).
     """
+    from core.session import SESSION
+
+    if not SESSION.fastq_pairs:
+        return {"error": "no_pairs", "message": "No matched FASTQs. Call scan_fastqs then match_pairs first."}
+
+    errors: list[str] = []
+    used: set[str] = set()
     rows = []
-    for match in matches:
-        sample = match.get("sample", "unknown")
-        strandedness = "auto"
-        if metadata and sample in metadata:
-            strandedness = metadata[sample].get("strandedness", "auto")
-
-        fastq_1 = match.get("fastq_1") or ""
-        fastq_2 = match.get("fastq_2") or ""
-        if fastq_1:
-            fastq_1 = str(Path(fastq_1).resolve())
-        if fastq_2:
-            fastq_2 = str(Path(fastq_2).resolve())
-
+    for i, entry in enumerate(samples):
+        pair_id = entry.get("pair_id", "")
+        pair = SESSION.fastq_pairs.get(pair_id)
+        if pair is None:
+            errors.append(f"Entry {i}: unknown pair_id '{pair_id}'.")
+            continue
+        if pair_id in used:
+            errors.append(f"Entry {i}: pair_id '{pair_id}' is used more than once.")
+            continue
+        used.add(pair_id)
         rows.append({
-            "sample": sample,
-            "fastq_1": fastq_1,
-            "fastq_2": fastq_2,
-            "strandedness": strandedness,
+            "sample": entry.get("sample", ""),
+            "pair_id": pair_id,
+            "fastq_1": pair.get("fastq_1", ""),
+            "fastq_2": pair.get("fastq_2", ""),
+            "strandedness": entry.get("strandedness") or "auto",
         })
+    if errors:
+        return {"error": "invalid_samples", "errors": errors, "known_pair_ids": sorted(SESSION.fastq_pairs)}
 
     import io
     output = io.StringIO()
-    writer = csv.writer(output)
+    writer = csv.writer(output, lineterminator="\n")
     writer.writerow(["sample", "fastq_1", "fastq_2", "strandedness"])
     for row in rows:
         writer.writerow([row["sample"], row["fastq_1"], row["fastq_2"], row["strandedness"]])
-    csv_content = output.getvalue()
 
-    csv_lines = csv_content.splitlines()
-    preview_lines = csv_lines[:11]  # header + first 10 data rows
+    SESSION.samplesheet_draft = output.getvalue()
+    SESSION.samplesheet_draft_valid = False
 
     return {
-        "n_samples": len(rows),
-        "columns": ["sample", "fastq_1", "fastq_2", "strandedness"],
-        "preview": "\n".join(preview_lines),
-        "csv_content": csv_content,
+        "n_rows": len(rows),
+        "n_samples": len({r["sample"] for r in rows}),
+        "rows": [{k: r[k] for k in ("sample", "pair_id", "strandedness")} for r in rows],
+        "unused_pair_ids": sorted(set(SESSION.fastq_pairs) - used),
     }
 
 
-def validate_samplesheet(sheet: str) -> Summary:
-    """Validate a draft sample sheet CSV string.
+def validate_samplesheet() -> Summary:
+    """Validate the current draft (from draft_samplesheet) and record whether it passed."""
+    from core.session import SESSION
 
-    Checks: required columns present, no empty sample names, no duplicate sample names,
-    FASTQ paths are non-empty, strandedness is a valid value. Returns a list of warnings
+    if SESSION.samplesheet_draft is None:
+        return {"error": "no_draft", "message": "No draft sample sheet. Call draft_samplesheet first."}
+    result = _check_samplesheet(SESSION.samplesheet_draft, check_files=True)
+    SESSION.samplesheet_draft_valid = result["valid"]
+    return result
+
+
+def _check_samplesheet(sheet: str, check_files: bool = False) -> Summary:
+    """Check a sample sheet CSV string.
+
+    Checks: required columns present, sample names non-empty without whitespace, repeated
+    sample names flagged, FASTQ paths non-empty (and existing, with check_files),
+    strandedness is a valid value. Returns a list of warnings
     and errors, or confirms the sheet is valid.
     """
-    lines = sheet.strip().split("\n")
+    lines = sheet.strip().splitlines()
     if not lines:
         return {"valid": False, "errors": ["Empty sample sheet."]}
 
@@ -244,14 +285,21 @@ def validate_samplesheet(sheet: str) -> Summary:
         sample = row.get("sample", "").strip()
         if not sample:
             errors.append(f"Row {i}: empty sample name.")
+        elif re.search(r"\s", sample):
+            errors.append(f"Row {i}: sample name '{sample}' contains whitespace.")
         elif sample in samples_seen:
-            warnings.append(f"Row {i}: duplicate sample name '{sample}'.")
+            warnings.append(f"Row {i}: repeated sample name '{sample}' (fine only if these are lanes of one sample).")
         samples_seen.add(sample)
 
         if not row.get("fastq_1", "").strip():
             errors.append(f"Row {i}: empty fastq_1.")
         if not row.get("fastq_2", "").strip():
             warnings.append(f"Row {i}: empty fastq_2 (single-end?).")
+        if check_files:
+            for key in ("fastq_1", "fastq_2"):
+                path = row.get(key, "").strip()
+                if path and not Path(path).is_file():
+                    errors.append(f"Row {i}: {key} does not exist: {path}")
 
         strand = row.get("strandedness", "").strip()
         if strand and strand not in valid_strandedness:
@@ -265,41 +313,47 @@ def validate_samplesheet(sheet: str) -> Summary:
     }
 
 
-def stage_fastqs(
-    pairs: list[dict], source_dir: str, staging_dir: str
-) -> Summary:
-    """Create a staging directory of symlinks with clean names.
+def stage_fastqs(samples: list[dict]) -> Summary:
+    """Symlink pairs to clean names ({sample}_R1.fastq.gz) in the run's staged_fastqs/.
 
-    Only needed when original filenames aren't suitable for the sample sheet (e.g.
-    Illumina names with index/lane segments). Creates symlinks pointing back to the
-    originals and writes a rename_manifest.json recording every mapping.
+    Only needed when original filenames aren't suitable. Entries are {"pair_id",
+    "sample"}; the stored pairs are updated to the links so draft_samplesheet uses them.
+    Writes rename_manifest.json recording every mapping.
     """
-    src = Path(source_dir)
-    stage = Path(staging_dir)
-    stage.mkdir(parents=True, exist_ok=True)
+    from core.session import SESSION
 
-    manifest = []
-    staged_pairs = []
-
-    for pair in pairs:
-        sample = pair["sample"]
-        entry = {"sample": sample}
-        for key in ("fastq_1", "fastq_2"):
-            if key not in pair:
-                continue
-            original = src / pair[key]
-            ext = "".join(Path(pair[key]).suffixes[-2:])  # .fastq.gz
+    errors: list[str] = []
+    planned: list[tuple[str, str, str, str]] = []  # pair_id, key, original, clean name
+    for i, entry in enumerate(samples):
+        pair_id, sample = entry.get("pair_id", ""), entry.get("sample", "")
+        pair = SESSION.fastq_pairs.get(pair_id)
+        if pair is None:
+            errors.append(f"Entry {i}: unknown pair_id '{pair_id}'.")
+            continue
+        if not sample or re.search(r"[\s/]", sample):
+            errors.append(f"Entry {i}: invalid sample name '{sample}'.")
+            continue
+        for key, original in pair.items():
+            ext = next(e for e in (".fastq.gz", ".fq.gz", ".fastq", ".fq") if original.endswith(e))
             read = "R1" if key == "fastq_1" else "R2"
-            clean_name = f"{sample}_{read}{ext}"
-            link = stage / clean_name
-            link.symlink_to(original.resolve())
-            manifest.append({
-                "original": str(original),
-                "staged": str(link),
-                "clean_name": clean_name,
-            })
-            entry[key] = str(link)
-        staged_pairs.append(entry)
+            planned.append((pair_id, key, original, f"{sample}_{read}{ext}"))
+    names = [p[3] for p in planned]
+    clashes = sorted({n for n in names if names.count(n) > 1})
+    if clashes:
+        errors.append(f"Clean names would collide: {', '.join(clashes)}.")
+    if errors:
+        return {"error": "invalid_samples", "errors": errors}
+
+    stage = SESSION.require_paths().dir / "staged_fastqs"
+    stage.mkdir(parents=True, exist_ok=True)
+    manifest = []
+    for pair_id, key, original, clean_name in planned:
+        link = stage / clean_name
+        if link.is_symlink():
+            link.unlink()
+        link.symlink_to(Path(original).resolve())
+        SESSION.fastq_pairs[pair_id][key] = str(link)
+        manifest.append({"pair_id": pair_id, "original": original, "staged": str(link), "clean_name": clean_name})
 
     manifest_path = stage / "rename_manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
@@ -308,7 +362,7 @@ def stage_fastqs(
         "n_links": len(manifest),
         "staging_dir": str(stage),
         "manifest_path": str(manifest_path),
-        "staged_pairs": staged_pairs,
+        "staged": [{"pair_id": m["pair_id"], "clean_name": m["clean_name"]} for m in manifest],
     }
 
 
@@ -316,14 +370,20 @@ def write_report(report_markdown: str) -> Summary:
     """Write the agent's analysis report to the run directory.
 
     The agent supplies the narrative: what it found, decisions it made, warnings,
-    and the final sample sheet summary. Called after save_samplesheet.
+    and the final sample sheet summary. Called after save_samplesheet. If no sample
+    sheet was saved, a warning banner is prepended so the report can't claim otherwise.
     """
     from core.session import SESSION
 
     paths = SESSION.require_paths()
     report_path = paths.dir / "report.md"
+    result: Summary = {"report_path": str(report_path), "report_chars": len(report_markdown)}
+    if not paths.samplesheet.is_file():
+        warning = "No sample sheet was saved in this run; this report does not describe a usable sample sheet."
+        report_markdown = f"> ⚠ {warning}\n\n{report_markdown}"
+        result["warning"] = warning
     report_path.write_text(report_markdown.rstrip() + "\n")
-    return {"report_path": str(report_path), "report_chars": len(report_markdown)}
+    return result
 
 
 def save_design(rows: list[dict]) -> Summary:
@@ -362,15 +422,67 @@ def save_design(rows: list[dict]) -> Summary:
     }
 
 
-def save_samplesheet(csv_content: str, output_path: str) -> Summary:
-    """Write the sample sheet CSV to disk.
+def save_samplesheet() -> Summary:
+    """Write the validated draft to the run directory's canonical samplesheet path.
 
-    The LLM provides output_path, but we always write to the run directory's
-    canonical location so downstream stages can find it reliably.
+    Takes no arguments: the CSV is the exact draft that passed validate_samplesheet,
+    so the LLM never retypes it.
     """
     from core.session import SESSION
+
+    if SESSION.samplesheet_draft is None:
+        return {"error": "no_draft", "message": "No draft sample sheet. Call draft_samplesheet first."}
+    if not SESSION.samplesheet_draft_valid:
+        return {"error": "not_validated",
+                "message": "The current draft has not passed validate_samplesheet. Validate it (and fix any errors) first."}
     path = SESSION.require_paths().samplesheet
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(csv_content)
-    n_samples = len(csv_content.strip().split("\n")) - 1
+    path.write_text(SESSION.samplesheet_draft)
+    n_samples = len(SESSION.samplesheet_draft.strip().splitlines()) - 1
     return {"samplesheet_path": str(path), "n_samples": n_samples}
+
+
+_RUN_ACCESSION = re.compile(r"[SED]RR\d+")
+
+
+def sample_label_table(paths) -> str | None:
+    """Code-built table for the approval screen: sample -> condition -> run -> GEO sample -> title.
+
+    Runs are read from each row's fastq_1 filename (symlinks resolved) and labels from
+    sample_metadata.csv (GEO/ENA), so the human checks names against GEO titles rather
+    than file paths. Not a tool. None when there is no sample metadata.
+    """
+    if not paths.sample_metadata.is_file() or not paths.samplesheet.is_file():
+        return None
+    with paths.sample_metadata.open() as f:
+        meta = {r["run_accession"]: r for r in csv.DictReader(f)}
+    conditions: dict[str, str] = {}
+    if paths.design.is_file():
+        with paths.design.open() as f:
+            conditions = {r.get("sample", ""): r.get("condition", "") for r in csv.DictReader(f)}
+
+    header = ["sample", "condition", "run", "GEO sample", "GEO title"] if conditions else \
+        ["sample", "run", "GEO sample", "GEO title"]
+    rows, used, warnings = [], set(), []
+    with paths.samplesheet.open() as f:
+        for r in csv.DictReader(f):
+            sample = r.get("sample", "")
+            m = _RUN_ACCESSION.search(Path(r.get("fastq_1", "")).resolve().name)
+            run = m.group(0) if m else ""
+            info = meta.get(run)
+            if info is None:
+                warnings.append(f"⚠ {sample}: FASTQ does not match any downloaded run")
+            else:
+                used.add(run)
+            row = [sample, run or "?", info["sample"] if info else "?", info["title"] if info else "?"]
+            if conditions:
+                row.insert(1, conditions.get(sample, "?"))
+            rows.append(row)
+    missing = sorted(set(meta) - used)
+    if missing:
+        warnings.append(f"⚠ Downloaded runs not in the sample sheet: {', '.join(missing)}")
+
+    widths = [max(len(str(x)) for x in col) for col in zip(header, *rows)]
+    lines = ["  ".join(str(x).ljust(w) for x, w in zip(line, widths)).rstrip() for line in [header, *rows]]
+    lines.insert(1, "  ".join("-" * w for w in widths))
+    return "\n".join(lines + warnings)

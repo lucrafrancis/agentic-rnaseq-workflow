@@ -190,10 +190,13 @@ def _run_pipeline(prompt: str, *, skip_download: bool = False) -> None:
             if report.is_file():
                 print(f"\nReport: {report}")
 
+        from agents.samplesheet.tools import sample_label_table
+
         preview = samplesheet.read_text()
+        labels = sample_label_table(paths)
         result = present_for_approval(
             title="Sample sheet",
-            preview=preview,
+            preview=f"{labels}\n\n{preview}" if labels else preview,
             file_path=samplesheet,
             summary_stats={"samples": len(preview.strip().splitlines()) - 1},
         )

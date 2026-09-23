@@ -74,110 +74,79 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
     {
         "name": "match_pairs",
-        "description": "Match FASTQ files into R1/R2 pairs by filename pattern. Returns "
-        "matched pairs, incomplete pairs, and unpaired files. Run after scan_fastqs.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "fastq_list": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "List of FASTQ file paths from scan_fastqs.",
-                },
-            },
-            "required": ["fastq_list"],
-        },
+        "description": "Match the FASTQs from the last scan_fastqs into R1/R2 pairs by filename "
+        "pattern. Takes no arguments. Every matched pair, incomplete pair and unpaired file gets "
+        "a pair_id (the filename prefix, e.g. SRR26539594, or the filename for unpaired files) "
+        "with a suggested sample name. Refer to FASTQs by pair_id from here on.",
+        "input_schema": {"type": "object", "properties": {}},
     },
     {
         "name": "draft_samplesheet",
-        "description": "Draft an nf-core/rnaseq sample sheet CSV from matched pairs and "
-        "optional metadata. Returns a preview (first 10 rows), full CSV content, and "
-        "summary stats. Strandedness defaults to 'auto' unless metadata overrides it.",
+        "description": "Draft the nf-core/rnaseq sample sheet. Give one entry per pair_id to "
+        "include, with the sample name you chose; the tools fill in the FASTQ paths. Lanes of "
+        "one sample: several pair_ids with the same sample name. Unknown or repeated pair_ids "
+        "reject the draft. Returns the rows and any unused pair_ids. The draft is kept by the "
+        "tools; validate_samplesheet and save_samplesheet act on it, and drafting again "
+        "replaces it and resets validation.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "matches": {
+                "samples": {
                     "type": "array",
                     "items": {
                         "type": "object",
                         "properties": {
-                            "sample": {"type": "string"},
-                            "fastq_1": {"type": "string"},
-                            "fastq_2": {"type": "string"},
+                            "pair_id": {"type": "string", "description": "A pair_id from match_pairs."},
+                            "sample": {"type": "string", "description": "Sample name (no whitespace)."},
+                            "strandedness": {
+                                "type": "string",
+                                "enum": ["auto", "forward", "reverse", "unstranded"],
+                                "description": "Defaults to 'auto'.",
+                            },
                         },
+                        "required": ["pair_id", "sample"],
                     },
-                    "description": "Matched pairs from match_pairs.",
-                },
-                "metadata": {
-                    "type": "object",
-                    "description": "Optional: sample name -> attributes dict with strandedness overrides.",
                 },
             },
-            "required": ["matches"],
+            "required": ["samples"],
         },
     },
     {
         "name": "validate_samplesheet",
-        "description": "Validate a draft sample sheet CSV string. Checks required columns, "
-        "empty fields, duplicates, and strandedness values. Returns errors and warnings.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "sheet": {
-                    "type": "string",
-                    "description": "The sample sheet CSV content to validate.",
-                },
-            },
-            "required": ["sheet"],
-        },
+        "description": "Validate the current draft from draft_samplesheet. Checks required "
+        "columns, sample names, repeated names, that every FASTQ exists, and strandedness "
+        "values. Returns errors and warnings.",
+        "input_schema": {"type": "object", "properties": {}},
     },
     {
         "name": "stage_fastqs",
-        "description": "Create symlinks with clean filenames in a staging directory. Only "
-        "needed when original names aren't suitable (e.g. Illumina index/lane segments). "
-        "Writes a rename_manifest.json recording every mapping. Returns staged pairs with "
-        "updated paths for the sample sheet.",
+        "description": "Symlink pairs to clean filenames ({sample}_R1.fastq.gz) in the run "
+        "directory. Only needed when original names aren't suitable (e.g. Illumina index/lane "
+        "segments); nf-core uses the sample column for naming, so this is rarely necessary. "
+        "The stored pairs then point at the links. Writes rename_manifest.json.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "pairs": {
+                "samples": {
                     "type": "array",
                     "items": {
                         "type": "object",
                         "properties": {
+                            "pair_id": {"type": "string"},
                             "sample": {"type": "string"},
-                            "fastq_1": {"type": "string"},
-                            "fastq_2": {"type": "string"},
                         },
+                        "required": ["pair_id", "sample"],
                     },
-                    "description": "Matched pairs from match_pairs.",
-                },
-                "source_dir": {
-                    "type": "string",
-                    "description": "Directory the original FASTQ paths are relative to.",
-                },
-                "staging_dir": {
-                    "type": "string",
-                    "description": "Directory to create symlinks in.",
                 },
             },
-            "required": ["pairs", "source_dir", "staging_dir"],
+            "required": ["samples"],
         },
     },
     {
         "name": "save_samplesheet",
-        "description": "Write the validated sample sheet CSV to the run directory. Call this after "
-        "validate_samplesheet confirms no errors, then call write_report.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "csv_content": {
-                    "type": "string",
-                    "description": "The validated sample sheet CSV content.",
-                },
-            },
-            "required": ["csv_content"],
-        },
+        "description": "Write the current draft to the run directory. Takes no arguments; "
+        "refuses unless validate_samplesheet passed on the current draft. Then call write_report.",
+        "input_schema": {"type": "object", "properties": {}},
     },
     {
         "name": "save_design",

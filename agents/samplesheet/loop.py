@@ -15,5 +15,4 @@ def run_samplesheet_agent(user_prompt: str) -> list[dict]:
         tool_functions=TOOL_FUNCTIONS,
         user_prompt=user_prompt,
         label="samplesheet",
-        hide_args=frozenset({"csv_content"}),
     )

@@ -27,6 +27,13 @@ class Session:
         self.source_prompt: str | None = None  # where the prompt was read from, for relative paths
         self.mode: str = "pipeline"  # "pipeline" (FASTQ -> nextflow -> analysis) or "analysis" (counts only)
 
+        # Samplesheet state — files, pairs and the draft live here so the LLM never relays
+        # paths or CSV between tools; it refers to pairs by ID
+        self.fastq_files: list[str] = []
+        self.fastq_pairs: dict[str, dict[str, str]] = {}  # pair_id -> {"fastq_1", "fastq_2"}
+        self.samplesheet_draft: str | None = None
+        self.samplesheet_draft_valid: bool = False
+
         # Analysis state — populated by Stage 3 tools
         self.counts_df: pd.DataFrame | None = None
         self.gene_names: pd.Series | None = None

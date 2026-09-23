@@ -22,8 +22,15 @@ Guidelines:
   or files that don't match paired-end patterns.
 - If metadata is available, use it to set strandedness and enrich sample names. If not,
   default strandedness to 'auto'.
+- You never pass file paths or CSV content between tools: match_pairs gives every
+  pair a pair_id, and draft_samplesheet takes pair_ids with the sample names you choose.
+  If sample metadata maps run accessions to GEO samples/titles, name samples from the
+  titles; the human checks your names against them at approval.
 - Use stage_fastqs only when filenames need cleaning for the sample sheet.
-- After drafting, always validate before saving.
+- After drafting, always validate before saving. validate_samplesheet and
+  save_samplesheet act on the latest draft.
+- If a tool returns an error you cannot resolve, say so plainly in the report;
+  never describe a sample sheet as saved unless save_samplesheet succeeded.
 - After saving, if you can infer the experimental design (which samples are
   treated/control/etc.) from sample names, metadata, or the user's prompt, call
   save_design. This gives the downstream analysis agent a starting design. Do not

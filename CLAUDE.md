@@ -37,7 +37,7 @@ The prompt file describes the data (FASTQ location, organism, metadata path, str
 - Human approval belongs between stages, never inside the agent loop
 - Keep code minimal — no bloat, no premature abstractions
 - Tests are offline (no API calls)
-- Tools must enforce correctness, not the LLM — paths are resolved to absolute in the tools themselves (`scan_fastqs`, `draft_samplesheet`), `save_samplesheet` always writes to the canonical run directory location, `SubmissionParams` routes resource limits to `custom.config` vs pipeline params to `nf_params.yml` automatically, `configure_submission` forces `pseudo_aligner: salmon` when `skip_alignment` is set (so counts are always produced), and `generate_figures`/`write_report` supply real figure paths and captions and append the disclaimer rather than trusting the LLM to get filenames or caveats right. Tools may make lossless mechanical corrections to LLM output, and reject anything else with a reason — never silently delete what the LLM wrote. The LLM is a lossy intermediary; don't trust it to preserve values faithfully between tool calls.
+- Tools must enforce correctness, not the LLM — paths are resolved to absolute in the tools themselves (`scan_fastqs`, `draft_samplesheet`), the samplesheet agent never relays paths or CSV (`scan_fastqs`/`match_pairs` keep files and pairs in the session, `draft_samplesheet` takes only `pair_id` + sample name + strandedness, `validate_samplesheet`/`save_samplesheet` take no arguments; validation checks every FASTQ exists, save refuses an unvalidated draft and always writes to the canonical run directory location, and `write_report` prepends a ⚠ banner if no sheet was saved), the sample sheet approval screen shows a code-built sample → condition → run → GSM → GEO title table, `SubmissionParams` routes resource limits to `custom.config` vs pipeline params to `nf_params.yml` automatically, `configure_submission` forces `pseudo_aligner: salmon` when `skip_alignment` is set (so counts are always produced), and `generate_figures`/`write_report` supply real figure paths and captions and append the disclaimer rather than trusting the LLM to get filenames or caveats right. Tools may make lossless mechanical corrections to LLM output, and reject anything else with a reason — never silently delete what the LLM wrote. The LLM is a lossy intermediary; don't trust it to preserve values faithfully between tool calls.
 
 ## Prerequisites
 
@@ -100,7 +100,7 @@ Agent loops and the troubleshooter use automatic prompt caching (top-level `cach
 - Counts mode step 2/3: per-sample GEO files (`_RAW.tar`, e.g. GSE245856) and xlsx are listed but not parsed.
 - Untraced-numbers audit in `write_report` (flag numbers typed in prose that match no fact) — not built.
 - Only one DE contrast is tracked per run (`SESSION.deseq_results` is overwritten).
-- Samplesheet agent relays `match_pairs` output into `draft_samplesheet` (gated by approval, but still an LLM relay); analysis `set_design` has no approval step.
+- Analysis `set_design` has no approval step.
 - Enrichr and NCBI rate limits (429s, captcha pages) are handled but can still slow or interrupt runs; ENA download speed varies a lot (aria2c `-x 16` may help).
 - Nextflow `work/` directories are never cleaned up automatically.
 
