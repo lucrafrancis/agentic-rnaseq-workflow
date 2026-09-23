@@ -247,7 +247,8 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "parameter, version or citation — use placeholders: {{fact.name}} (from "
         "summarize_findings facts), {{gene:SYMBOL}} (renders log2FC and padj), {{cite:PMID}} "
         "(fetched references only), {{table:name}} (code-generated tables; every table in "
-        "tables_required must be placed). Link figures only by paths from generate_figures. "
+        "tables_required must be placed). Place EVERY figure from generate_figures as "
+        "![description](figures/<name>.png) — no other figures. "
         "Any problem rejects the whole report with a list of all issues — fix them all and "
         "resubmit. The tool adds figure captions and the standard disclaimer. Call last.",
         "input_schema": {

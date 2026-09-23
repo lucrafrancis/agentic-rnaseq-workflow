@@ -72,13 +72,16 @@ Values in the report come from code, never from you. This is the most important 
 - Describe things consistently with the facts: e.g. the data source and value type
   ({{provenance.data_source}}, {{provenance.value_type}}), never "normalised" for raw counts.
 - If write_report rejects the report, it lists every problem — fix them all at once.
+- Placeholders only work inside write_report. In your chat messages to the user, refer
+  to the report instead of quoting values.
 
 Figures: call generate_figures before writing the report. It returns every figure's
-path and a factual caption. Link only those paths, and describe each figure consistently
+path and a factual caption. Place every one of them, as ![description](figures/<name>.png)
+(both the [description] and the (path) parts), and no others. Link only those paths, and describe each figure consistently
 with its caption (e.g. the number of genes in the heatmap) — never describe a figure you
 were not given. write_report places the file path and caption under each figure itself.
 Choose pca_color_by from the returned options if some design columns are not worth a
-separate PCA plot (default: all of them).
+separate PCA plot (default: all of them; condition always gets pca.png).
 
 References and citations:
 - If you fetched a paper via fetch_abstract, cite it only as {{cite:<PMID>}}.

@@ -69,4 +69,8 @@ Design:
 
 When done, summarise: file chosen (and why), sample mapping, value type, conditions and
 covariates, and anything the user should check. The result is presented for approval.
+
+Your job ends there. QC, differential expression, enrichment and the report are done
+automatically by a separate analysis stage after the user approves — do not attempt
+them, call tools you don't have, write analysis code, or describe or offer that work.
 """
