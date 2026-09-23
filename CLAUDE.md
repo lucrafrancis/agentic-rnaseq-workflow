@@ -77,6 +77,33 @@ Agent loops and the troubleshooter use automatic prompt caching (top-level `cach
 
 - `examples/GSE245856/` — VPA treatment in HEK293T cells, 6 samples (3 CTRL, 3 VPA). `design.csv` and `prompt.txt` are in git; `counts.csv` (47k genes) is gitignored and must be generated locally. Used for analysis agent testing.
 
+## Current status (2026-09-23)
+
+**Goal right now:** validate the workflow end to end on real data, then build a benchmark of varied GEO datasets before scaling up runs (AWS / API credits being sourced).
+
+**Smoke tests** (`examples/smoke/`, README has commands, expected approval screens and post-run checks):
+
+1. `GSE157852_counts` (counts mode, single factor) — **passing** on Haiku and Sonnet (runs `runs/20260923_GSE157852_counts_2` / `_3`).
+2. `GSE164073_counts` (counts mode, hidden `tissue` covariate) — **passing**; both models add `covariates=["tissue"]` unprompted (`_2` / `_3`).
+3. `GSE246386_full` (full pipeline: download → samplesheet → nextflow salmon-only → analysis, 6 paired-end runs, 5.49 GB) — **in progress**: `runs/20260923_GSE246386_full`, FASTQs downloading via aria2c into `data/GSE246386/fastqs/` (ENA ~0.5–0.8 MB/s, ~2–3 h). The run waits at the samplesheet approval. If interrupted: `uv run python run.py --resume runs/20260923_GSE246386_full`. This is the first real test of the new FASTQ path (BioProject resolution, GEO run labels, `sample_metadata.csv` handover, real `--resume`). The 19 MB `SRR26539596_1.fastq.gz` in the data folder is a stale partial that aria2c overwrites when it reaches that file.
+
+**Model comparison** (same decisions on both datasets): Haiku ~$0.09–0.12 per counts-mode dataset, Sonnet ~$0.28–0.31. Sonnet writes longer reports and types more numbers by hand; Haiku made one rounding slip before the relevant facts existed. Decision so far: keep Haiku as default (`AGENT_MODEL=sonnet` to compare); samplesheet-agent model still open.
+
+**Next steps**
+
+- Finish and review the GSE246386 full run (check samplesheet against README §3 before approving).
+- Download approval screen prints the whole ~400-line script and only shows the run → GSM → title table when a subset is selected; it should always show the labelled table, sizes and tool, and just give the script path.
+- Build the benchmark: ~8–10 human/mouse GEO datasets with expected mapping/design/samplesheet; score agents (and Haiku vs Sonnet) with `usage.jsonl` for cost.
+
+**Known gaps (not blocking)**
+
+- Counts mode step 2/3: per-sample GEO files (`_RAW.tar`, e.g. GSE245856) and xlsx are listed but not parsed.
+- Untraced-numbers audit in `write_report` (flag numbers typed in prose that match no fact) — not built.
+- Only one DE contrast is tracked per run (`SESSION.deseq_results` is overwritten).
+- Samplesheet agent relays `match_pairs` output into `draft_samplesheet` (gated by approval, but still an LLM relay); analysis `set_design` has no approval step.
+- Enrichr and NCBI rate limits (429s, captcha pages) are handled but can still slow or interrupt runs; ENA download speed varies a lot (aria2c `-x 16` may help).
+- Nextflow `work/` directories are never cleaned up automatically.
+
 ## Future direction
 
 - **Streamlit UI** — wrap the CLI in a web app for non-coders. Local mode (user has nextflow/Docker), with cloud submission as a later addition.
