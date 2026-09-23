@@ -252,7 +252,7 @@ def _download_stage(prompt: str) -> None:
     with a valid MD5 are skipped, so an interrupted download picks up where it left off.
     """
     from agents.download.loop import run_download_agent
-    from agents.download.tools import execute_download, generate_download_script, validate_downloads
+    from agents.download.tools import execute_download, generate_download_script, selected_runs, validate_downloads
 
     print("\n--- Stage 0: Data Download ---")
     paths = SESSION.require_paths()
@@ -261,7 +261,7 @@ def _download_stage(prompt: str) -> None:
 
     if previous.get("output_dir"):
         print(f"Resuming download into {previous['output_dir']} (skipping files with valid MD5).")
-        result = generate_download_script(previous["output_dir"])
+        result = generate_download_script(previous["output_dir"], runs=previous.get("selected_runs"))
         if "error" in result:
             sys.exit(f"Could not regenerate download script: {result['message']}")
     else:
@@ -282,11 +282,19 @@ def _download_stage(prompt: str) -> None:
     download_bytes = metadata.get("download_bytes", 0)
     size_str = f"{download_bytes / (1024**3):.2f} GB" if download_bytes else "unknown"
 
+    chosen = selected_runs(metadata)
+    stats = {"files_to_download": n_downloads, "estimated_size": size_str}
+    if metadata.get("selected_runs") is not None:
+        stats["runs_selected"] = f"{len(chosen)} of {len(metadata['runs'])}"
+        stats["selection"] = "".join(
+            f"\n    {r['run_accession']}  {r.get('sample_alias', '')}  {r.get('sample_title', '')}" for r in chosen
+        )
+
     result = present_for_approval(
         title="Download script",
         preview=script_content,
         file_path=paths.download_script,
-        summary_stats={"files_to_download": n_downloads, "estimated_size": size_str},
+        summary_stats=stats,
     )
 
     if not result.approved:
@@ -305,7 +313,7 @@ def _download_stage(prompt: str) -> None:
         return
 
     print("Validating checksums...")
-    val_result = validate_downloads(metadata["runs"], output_dir)
+    val_result = validate_downloads(chosen, output_dir)
     if not val_result["all_valid"]:
         print("\n⚠️  Checksum validation failed:")
         for f in val_result["files"]:

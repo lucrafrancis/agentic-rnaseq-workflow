@@ -338,3 +338,136 @@ class TestValidateDownloads:
         assert result["all_valid"] is False
         assert result["n_fail"] == 1
         assert result["files"][0]["status"] == "fail"
+
+
+# --- lookup failures vs. genuinely empty results ---
+
+
+class TestLookupFailures:
+    @patch("agents.download.tools._http_get_json")
+    def test_lookup_failure_is_not_no_runs(self, mock_get_json, run_dir: Path):
+        from agents.download.tools import LookupFailed
+        mock_get_json.side_effect = LookupFailed("esearch: empty or non-JSON reply")
+        result = resolve_accession("GSE110004")
+        assert result["error"] == "lookup_failed"
+        assert "retry" in result["message"]
+        assert not SESSION.require_paths().download_metadata.exists()
+
+    @patch("agents.download.tools._http_get_json")
+    def test_esearch_error_payload_raises(self, mock_get_json):
+        from agents.download.tools import LookupFailed
+        mock_get_json.return_value = {"esearchresult": {"ERROR": "API rate limit exceeded"}}
+        with pytest.raises(LookupFailed):
+            _resolve_gse("GSE123")
+
+    @patch("agents.download.tools._http_get_json")
+    @patch("agents.download.tools._http_get")
+    def test_empty_efetch_raises(self, mock_get, mock_get_json):
+        from agents.download.tools import LookupFailed
+        mock_get_json.return_value = {"esearchresult": {"idlist": ["1"]}}
+        mock_get.return_value = ""
+        with pytest.raises(LookupFailed):
+            _resolve_gse("GSE123")
+
+    @patch("agents.download.tools._http_get_json")
+    @patch("agents.download.tools._http_get")
+    def test_no_sra_link_is_no_runs(self, mock_get, mock_get_json, run_dir: Path):
+        mock_get_json.return_value = {"esearchresult": {"idlist": ["1"]}}
+        mock_get.return_value = "1. A microarray study\nPlatform GPL570\n"
+        result = resolve_accession("GSE123")
+        assert result["error"] == "no_runs_found"
+        assert "reachable" in result["message"]
+
+    def test_http_get_json_retries_empty_body(self, monkeypatch):
+        import io
+        from agents.download import tools
+        bodies = [b"", b"", b'{"ok": 1}']
+        monkeypatch.setattr(tools.urllib.request, "urlopen", lambda req, timeout: io.BytesIO(bodies.pop(0)))
+        monkeypatch.setattr(tools.time, "sleep", lambda s: None)
+        assert tools._http_get_json("https://example.org/x") == {"ok": 1}
+
+    def test_http_get_json_gives_up(self, monkeypatch):
+        import io
+        from agents.download import tools
+        monkeypatch.setattr(tools.urllib.request, "urlopen", lambda req, timeout: io.BytesIO(b""))
+        monkeypatch.setattr(tools.time, "sleep", lambda s: None)
+        with pytest.raises(tools.LookupFailed, match="empty or non-JSON"):
+            tools._http_get_json("https://example.org/x")
+
+
+# --- run subsetting ---
+
+
+def _three_runs() -> None:
+    _write_metadata([
+        {
+            "run_accession": f"SRR00{i}",
+            "sample_alias": f"GSM{i}",
+            "sample_title": title,
+            "files": [{"filename": f"SRR00{i}.fastq.gz", "url": f"ftp://test/{i}", "md5": "x", "bytes": 1000}],
+        }
+        for i, title in enumerate(["Mock rep1", "Mock rep2", "CoV2 rep1"], start=1)
+    ])
+
+
+class TestRunSelection:
+    def test_resolve_returns_sample_titles(self, run_dir: Path):
+        with patch("agents.download.tools._resolve_study") as mock:
+            mock.return_value = [{
+                "run_accession": "SRR001", "library_layout": "PAIRED", "sample_alias": "GSM1",
+                "sample_title": "Mock rep1", "files": [], "total_bytes": 0,
+            }]
+            result = resolve_accession("SRP001")
+        assert result["runs"][0]["sample"] == "GSM1"
+        assert result["runs"][0]["title"] == "Mock rep1"
+
+    def test_parse_ena_run_keeps_sample_fields(self):
+        run = _parse_ena_run({"run_accession": "SRR1", "sample_alias": "GSM1", "sample_title": "Mock rep1"})
+        assert run["sample_alias"] == "GSM1"
+        assert run["sample_title"] == "Mock rep1"
+
+    def test_script_only_includes_selected_runs(self, run_dir: Path, tmp_path: Path):
+        _three_runs()
+        result = generate_download_script(str(tmp_path / "out"), runs=["SRR001", "SRR003"])
+        assert result["n_files"] == 2
+        assert result["n_runs_selected"] == 2
+        assert result["n_runs_total"] == 3
+        script = Path(result["script_path"]).read_text()
+        assert "SRR002" not in script
+        metadata = json.loads(SESSION.require_paths().download_metadata.read_text())
+        assert metadata["selected_runs"] == ["SRR001", "SRR003"]
+
+    def test_all_runs_when_omitted(self, run_dir: Path, tmp_path: Path):
+        from agents.download.tools import selected_runs
+        _three_runs()
+        assert generate_download_script(str(tmp_path / "out"))["n_files"] == 3
+        metadata = json.loads(SESSION.require_paths().download_metadata.read_text())
+        assert metadata["selected_runs"] is None
+        assert len(selected_runs(metadata)) == 3
+
+    def test_selection_recorded_when_nothing_to_download(self, run_dir: Path, tmp_path: Path):
+        out = tmp_path / "out"
+        out.mkdir()
+        (out / "SRR001.fastq.gz").write_bytes(b"data")
+        md5 = _compute_md5(out / "SRR001.fastq.gz")
+        _write_metadata([{"run_accession": "SRR001", "files": [
+            {"filename": "SRR001.fastq.gz", "url": "ftp://t", "md5": md5, "bytes": 4}]}])
+        result = generate_download_script(str(out), runs=["SRR001"])
+        assert result["script_path"] is None
+        metadata = json.loads(SESSION.require_paths().download_metadata.read_text())
+        assert metadata["selected_runs"] == ["SRR001"]
+        assert metadata["output_dir"] == str(out.resolve())
+
+    @pytest.mark.parametrize("runs,fragment", [(["SRR999"], "SRR999"), ([], "empty")])
+    def test_bad_runs(self, run_dir: Path, tmp_path: Path, runs, fragment):
+        _three_runs()
+        result = generate_download_script(str(tmp_path / "out"), runs=runs)
+        assert result["error"] == "bad_runs"
+        assert fragment in result["message"]
+        assert check_existing_files(str(tmp_path), runs=runs)["error"] == "bad_runs"
+
+    def test_check_existing_respects_selection(self, run_dir: Path, tmp_path: Path):
+        _three_runs()
+        result = check_existing_files(str(tmp_path), runs=["SRR002"])
+        assert result["n_files"] == 1
+        assert result["files"][0]["run"] == "SRR002"

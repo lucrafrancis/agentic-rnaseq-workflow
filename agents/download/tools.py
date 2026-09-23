@@ -23,10 +23,19 @@ Summary = dict[str, Any]
 _MAX_RETRIES = 3
 _BACKOFF_BASE = 2.0
 
-_ENA_FIELDS = "run_accession,fastq_ftp,fastq_aspera,fastq_md5,fastq_bytes,library_layout"
+_ENA_FIELDS = (
+    "run_accession,fastq_ftp,fastq_aspera,fastq_md5,fastq_bytes,library_layout,sample_alias,sample_title"
+)
 _ENA_API = "https://www.ebi.ac.uk/ena/portal/api/filereport"
 _NCBI_ESEARCH = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
 _NCBI_EFETCH = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
+
+
+class LookupFailed(RuntimeError):
+    """NCBI/ENA could not be queried (network error, rate limiting, malformed reply).
+
+    Distinct from "queried fine, nothing found" — resolvers return [] only for that.
+    """
 
 
 def _http_get(url: str, timeout: int = 30) -> str:
@@ -46,6 +55,8 @@ def _http_get(url: str, timeout: int = 30) -> str:
 
 
 def _http_get_json(url: str, timeout: int = 30) -> Any:
+    """GET and parse JSON. Retries 429s and empty/non-JSON bodies (NCBI returns these
+    when throttling); raises LookupFailed once retries are exhausted."""
     req = urllib.request.Request(
         url,
         headers={
@@ -53,16 +64,23 @@ def _http_get_json(url: str, timeout: int = 30) -> Any:
             "Accept": "application/json",
         },
     )
+    last_error = "no response"
     for attempt in range(_MAX_RETRIES):
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
-            if e.code == 429 and attempt < _MAX_RETRIES - 1:
-                time.sleep(_BACKOFF_BASE ** (attempt + 1))
-                continue
-            raise
-    return {}
+            last_error = f"HTTP {e.code}"
+            if e.code != 429:
+                break
+        except json.JSONDecodeError:
+            last_error = "empty or non-JSON reply"
+        except urllib.error.URLError as e:
+            last_error = str(e.reason)
+            break
+        if attempt < _MAX_RETRIES - 1:
+            time.sleep(_BACKOFF_BASE ** (attempt + 1))
+    raise LookupFailed(f"{url.split('?')[0]}: {last_error}")
 
 
 def _compute_md5(filepath: Path) -> str:
@@ -105,6 +123,8 @@ def _parse_ena_run(row: dict) -> dict:
     return {
         "run_accession": row.get("run_accession", ""),
         "library_layout": row.get("library_layout", ""),
+        "sample_alias": row.get("sample_alias", ""),
+        "sample_title": row.get("sample_title", ""),
         "files": files,
         "total_bytes": total_bytes,
     }
@@ -114,22 +134,25 @@ def _parse_ena_run(row: dict) -> dict:
 
 
 def _resolve_gse(gse: str) -> list[dict]:
-    """GSE -> GDS record -> BioProject/SRP -> ENA FASTQ URLs."""
-    search_url = f"{_NCBI_ESEARCH}?db=gds&term={gse}[ACCN]&retmode=json"
-    try:
-        data = _http_get_json(search_url)
-    except (urllib.error.URLError, json.JSONDecodeError):
-        return []
+    """GSE -> GDS record -> BioProject/SRP -> ENA FASTQ URLs.
 
-    uid_list = data.get("esearchresult", {}).get("idlist", [])
+    Returns [] when the series has no linked SRA project; raises LookupFailed when
+    NCBI/ENA can't be queried.
+    """
+    data = _http_get_json(f"{_NCBI_ESEARCH}?db=gds&term={gse}[ACCN]&retmode=json")
+    result = data.get("esearchresult")
+    if result is None or "ERROR" in result:
+        raise LookupFailed(f"NCBI esearch returned no result for {gse}: {data}")
+    uid_list = result.get("idlist", [])
     if not uid_list:
         return []
 
-    fetch_url = f"{_NCBI_EFETCH}?db=gds&id={uid_list[0]}&retmode=text"
     try:
-        record = _http_get(fetch_url)
-    except urllib.error.URLError:
-        return []
+        record = _http_get(f"{_NCBI_EFETCH}?db=gds&id={uid_list[0]}&retmode=text")
+    except urllib.error.URLError as exc:
+        raise LookupFailed(f"NCBI efetch failed for {gse}: {exc}") from exc
+    if not record.strip():
+        raise LookupFailed(f"NCBI efetch returned an empty record for {gse}")
 
     match = re.search(r"acc=(PRJNA\d+|SRP\d+|ERP\d+|DRP\d+)", record)
     if match:
@@ -144,12 +167,9 @@ def _resolve_study(study: str) -> list[dict]:
         f"{_ENA_API}?accession={study}&result=read_run"
         f"&fields={_ENA_FIELDS}&format=json"
     )
-    try:
-        data = _http_get_json(url)
-    except (urllib.error.URLError, json.JSONDecodeError):
-        return []
+    data = _http_get_json(url)
     if not isinstance(data, list):
-        return []
+        raise LookupFailed(f"Unexpected ENA reply for {study}: {str(data)[:200]}")
     return [_parse_ena_run(r) for r in data if r.get("run_accession")]
 
 
@@ -161,16 +181,9 @@ def _resolve_runs(srr_ids: list[str]) -> list[dict]:
             f"{_ENA_API}?accession={srr}&result=read_run"
             f"&fields={_ENA_FIELDS}&format=json"
         )
-        try:
-            data = _http_get_json(url)
-            if isinstance(data, list):
-                for r in data:
-                    if r.get("run_accession"):
-                        runs.append(_parse_ena_run(r))
-        except (urllib.error.URLError, json.JSONDecodeError):
-            runs.append(
-                {"run_accession": srr, "files": [], "error": "ena_lookup_failed"}
-            )
+        data = _http_get_json(url)
+        if isinstance(data, list):
+            runs.extend(_parse_ena_run(r) for r in data if r.get("run_accession"))
     return runs
 
 
@@ -189,25 +202,36 @@ def resolve_accession(accession: str) -> Summary:
     accession = accession.strip()
     upper = accession.upper()
 
-    if upper.startswith("GSE"):
-        runs = _resolve_gse(accession)
-    elif upper.startswith(("SRP", "ERP", "DRP", "PRJNA")):
-        runs = _resolve_study(accession)
-    elif upper.startswith("SRR"):
-        runs = _resolve_runs([accession])
-    else:
+    if not upper.startswith(("GSE", "SRP", "ERP", "DRP", "PRJNA", "SRR")):
         return {
             "error": "unknown_accession_type",
             "message": f"Cannot resolve '{accession}'. Expected GSE, SRP, PRJNA, or SRR.",
+        }
+    try:
+        if upper.startswith("GSE"):
+            runs = _resolve_gse(accession)
+        elif upper.startswith("SRR"):
+            runs = _resolve_runs([accession])
+        else:
+            runs = _resolve_study(accession)
+    except LookupFailed as exc:
+        return {
+            "error": "lookup_failed",
+            "message": (
+                f"Could not query NCBI/ENA for '{accession}' ({exc}). This is usually "
+                "temporary (rate limiting or network) and says nothing about whether the "
+                "data exists. Tell the user to wait a few minutes and retry."
+            ),
         }
 
     if not runs:
         return {
             "error": "no_runs_found",
             "message": (
-                f"No runs found for '{accession}'. The dataset may be embargoed, "
-                "require dbGaP authorization, or the accession may be invalid. "
-                "Ask the user to verify the accession and check access requirements."
+                f"NCBI/ENA were reachable but '{accession}' has no downloadable runs. The "
+                "series may have no linked SRA data (e.g. microarray, or only processed "
+                "files), be embargoed, require dbGaP authorization, or the accession may "
+                "be invalid. Ask the user to verify the accession and access requirements."
             ),
         }
 
@@ -227,8 +251,11 @@ def resolve_accession(accession: str) -> Summary:
         "runs": [
             {
                 "run_accession": r["run_accession"],
+                "sample": r.get("sample_alias", ""),
+                "title": r.get("sample_title", ""),
                 "library_layout": r.get("library_layout", ""),
                 "n_files": len(r.get("files", [])),
+                "gb": round(r.get("total_bytes", 0) / (1024**3), 2),
             }
             for r in runs
         ],
@@ -236,11 +263,30 @@ def resolve_accession(accession: str) -> Summary:
     }
 
 
-def check_existing_files(search_dir: str) -> Summary:
+def _select_runs(metadata: dict, runs: list[str] | None) -> tuple[list[dict], str | None]:
+    """Resolve a list of run accessions against the metadata. None means all runs."""
+    if runs is None:
+        return metadata["runs"], None
+    if not runs:
+        return [], "runs is empty — omit it to use all runs."
+    by_acc = {r["run_accession"]: r for r in metadata["runs"]}
+    unknown = [r for r in runs if r not in by_acc]
+    if unknown:
+        return [], f"Not runs of {metadata.get('accession', 'this accession')}: {unknown[:10]}"
+    return [by_acc[r] for r in dict.fromkeys(runs)], None
+
+
+def selected_runs(metadata: dict) -> list[dict]:
+    """The runs chosen by generate_download_script (all runs if none were chosen)."""
+    return _select_runs(metadata, metadata.get("selected_runs"))[0]
+
+
+def check_existing_files(search_dir: str, runs: list[str] | None = None) -> Summary:
     """Check if expected FASTQ files already exist and validate MD5 checksums.
 
     Reads expected files from download_metadata.json (saved by resolve_accession).
     Computes MD5 for any files found and compares to expected checksums.
+    runs optionally restricts the check to those run accessions.
     """
     from core.session import SESSION
 
@@ -249,7 +295,9 @@ def check_existing_files(search_dir: str) -> Summary:
         return {"error": "no_metadata", "message": "Run resolve_accession first."}
 
     metadata = json.loads(paths.download_metadata.read_text())
-    runs = metadata["runs"]
+    runs, err = _select_runs(metadata, runs)
+    if err:
+        return {"error": "bad_runs", "message": err}
     dirpath = Path(search_dir)
 
     results = []
@@ -297,12 +345,13 @@ def check_existing_files(search_dir: str) -> Summary:
     }
 
 
-def generate_download_script(output_dir: str) -> Summary:
+def generate_download_script(output_dir: str, runs: list[str] | None = None) -> Summary:
     """Generate a shell script to download FASTQ files from ENA.
 
-    Reads download metadata from disk. Checks output_dir for files that
-    already exist and pass MD5 — those are skipped. Writes download.sh
-    and updates download_metadata.json with the output directory.
+    Reads download metadata from disk. runs optionally restricts the download to
+    those run accessions (default: all). Checks output_dir for files that already
+    exist and pass MD5 — those are skipped. Writes download.sh and records the
+    output directory and selected runs in download_metadata.json.
     """
     from core.session import SESSION
 
@@ -311,8 +360,16 @@ def generate_download_script(output_dir: str) -> Summary:
         return {"error": "no_metadata", "message": "Run resolve_accession first."}
 
     metadata = json.loads(paths.download_metadata.read_text())
-    runs = metadata["runs"]
+    selection = runs
+    runs, err = _select_runs(metadata, runs)
+    if err:
+        return {"error": "bad_runs", "message": err}
     dirpath = Path(output_dir).resolve()
+    # Record the selection up front so resume and validation see it even when
+    # nothing needs downloading.
+    metadata["selected_runs"] = [r["run_accession"] for r in runs] if selection is not None else None
+    metadata["output_dir"] = str(dirpath)
+    paths.download_metadata.write_text(json.dumps(metadata, indent=2) + "\n")
 
     skip = set()
     if dirpath.is_dir():
@@ -331,6 +388,7 @@ def generate_download_script(output_dir: str) -> Summary:
     if not downloads:
         return {
             "n_files": 0,
+            "n_runs_selected": len(runs),
             "n_skipped": len(skip),
             "message": "All files already present and valid. No downloads needed.",
             "script_path": None,
@@ -456,6 +514,8 @@ def generate_download_script(output_dir: str) -> Summary:
 
     return {
         "n_files": len(downloads),
+        "n_runs_selected": len(runs),
+        "n_runs_total": len(metadata["runs"]),
         "n_skipped": len(skip),
         "total_gb": round(total_bytes / (1024**3), 2) if total_bytes else 0,
         "output_dir": str(dirpath),

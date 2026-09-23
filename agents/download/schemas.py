@@ -15,7 +15,8 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "description": (
             "Resolve a GEO/SRA accession to download metadata. Supports GSE (GEO series), "
             "SRP/ERP/DRP (SRA study), PRJNA (BioProject), and SRR (individual run). "
-            "Queries NCBI and ENA APIs. Saves full metadata (URLs, MD5 checksums) to disk — "
+            "Queries NCBI and ENA APIs. Returns each run with its GEO sample (GSM) and title. "
+            "Saves full metadata (URLs, MD5 checksums) to disk — "
             "downstream tools read it directly so checksums never pass through you. "
             "Call this first."
         ),
@@ -44,6 +45,14 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "type": "string",
                     "description": "Directory to check for existing FASTQ files.",
                 },
+                "runs": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Optional run accessions (SRR...) to restrict to. Omit for all runs. "
+                        "Use when the prompt asks for a subset of samples."
+                    ),
+                },
             },
             "required": ["search_dir"],
         },
@@ -63,6 +72,14 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "output_dir": {
                     "type": "string",
                     "description": "Directory to download FASTQ files into.",
+                },
+                "runs": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Optional run accessions (SRR...) to restrict to. Omit for all runs. "
+                        "Use when the prompt asks for a subset of samples."
+                    ),
                 },
             },
             "required": ["output_dir"],

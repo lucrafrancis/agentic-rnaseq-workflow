@@ -121,16 +121,18 @@ class TestDownloadStage:
         _start()
         paths = SESSION.require_paths()
         paths.download_script.write_text("# stale\n")
-        paths.download_metadata.write_text(json.dumps({"runs": [], "output_dir": str(tmp_path)}))
+        paths.download_metadata.write_text(json.dumps(
+            {"runs": [], "output_dir": str(tmp_path), "selected_runs": ["SRR1"]}
+        ))
         regenerated = []
         monkeypatch.setattr(
             "agents.download.tools.generate_download_script",
-            lambda d: regenerated.append(d) or {"n_files": 0, "script_path": None},
+            lambda d, runs=None: regenerated.append((d, runs)) or {"n_files": 0, "script_path": None},
         )
 
         run._run_pipeline("GSE123456")
 
-        assert regenerated == [str(tmp_path)]
+        assert regenerated == [(str(tmp_path), ["SRR1"])]  # selection survives resume
         assert stubbed["download_agent"] == []
         assert not paths.download_script.exists()  # stale script removed, never approved
         assert SESSION.is_complete("download")
@@ -140,7 +142,7 @@ class TestDownloadStage:
         paths = SESSION.require_paths()
         paths.download_metadata.write_text(json.dumps({"runs": [], "output_dir": str(tmp_path)}))
 
-        def fake_generate(d):
+        def fake_generate(d, runs=None):
             paths.download_script.write_text("curl ...\n")
             return {"n_files": 1}
 
@@ -150,6 +152,35 @@ class TestDownloadStage:
             run._run_pipeline("GSE123456")
         assert not SESSION.is_complete("download")
         assert not SESSION.is_complete("samplesheet")
+
+
+    def test_selected_runs_shown_and_validated(self, stubbed, monkeypatch, tmp_path):
+        _start()
+        paths = SESSION.require_paths()
+        runs = [{"run_accession": f"SRR{i}", "sample_alias": f"GSM{i}", "sample_title": f"t{i}", "files": []}
+                for i in (1, 2)]
+        paths.download_metadata.write_text(json.dumps(
+            {"runs": runs, "output_dir": str(tmp_path), "selected_runs": ["SRR2"], "n_downloads": 1}
+        ))
+
+        def fake_generate(d, runs=None):
+            paths.download_script.write_text("curl ...\n")
+            return {"n_files": 1}
+
+        shown, validated = [], []
+        monkeypatch.setattr("agents.download.tools.generate_download_script", fake_generate)
+        monkeypatch.setattr("agents.download.tools.execute_download", lambda p: {"success": True})
+        monkeypatch.setattr("agents.download.tools.validate_downloads", lambda r, d: validated.append(r) or
+                            {"all_valid": True, "n_pass": 1, "files": []})
+        monkeypatch.setattr(run, "present_for_approval",
+                            lambda title, summary_stats=None, **kw: shown.append(summary_stats) or ApprovalResult(approved=True))
+
+        run._run_pipeline("GSE123456")
+
+        assert shown[0]["runs_selected"] == "1 of 2"
+        assert "GSM2" in shown[0]["selection"]
+        assert [r["run_accession"] for r in validated[0]] == ["SRR2"]
+        assert SESSION.is_complete("download")
 
 
 class TestAnalyzeMode:

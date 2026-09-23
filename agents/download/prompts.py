@@ -11,6 +11,13 @@ Guidelines:
 - Call resolve_accession first to query NCBI/ENA for the run metadata.
 - If the prompt mentions a FASTQ directory, use it for check_existing_files and as the
   download output_dir. If no directory is mentioned, use ./data/<accession>/fastqs/.
+- If the prompt asks for a subset of samples (e.g. "2 per condition", "only the 72 h
+  samples"), choose the runs from the sample titles returned by resolve_accession and
+  pass them as runs= to check_existing_files and generate_download_script. List which
+  runs you chose (run -> GSM -> title) so the user can verify at approval. Only what
+  you select is downloaded.
+- If resolve_accession returns lookup_failed, NCBI/ENA could not be reached — tell the
+  user to retry later. Do not suggest the accession is wrong or the data embargoed.
 - If all files already exist and pass checksum validation, report this and stop.
 - If some files are missing or corrupted, call generate_download_script.
 - If resolve_accession returns an error (embargoed data, invalid accession, no runs found),
