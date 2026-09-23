@@ -28,6 +28,13 @@ from core.session import SESSION
 Summary = dict[str, Any]
 
 _HEATMAP_PER_DIRECTION = 25
+_DE_PADJ = 0.05  # significance threshold used for DE summaries, tables and figures
+_TOP_TABLE_ROWS = 10
+_ENRICHR_LIBRARIES = {
+    "human": ["GO_Biological_Process_2023", "KEGG_2021_Human"],
+    "mouse": ["GO_Biological_Process_2023", "KEGG_2019_Mouse"],
+    "yeast": ["GO_Biological_Process_2023", "KEGG_2019"],
+}
 
 _QUANTILES = {"min": 0.0, "p25": 0.25, "median": 0.5, "p75": 0.75, "p95": 0.95, "max": 1.0}
 
@@ -146,6 +153,7 @@ def fetch_abstract(pmid: str) -> Summary:
             if pub_date is not None:
                 year = pub_date.findtext("Year", "")
 
+        SESSION.references[pmid] = {"title": title, "authors": authors, "journal": journal, "year": year}
         return {
             "pmid": pmid,
             "title": title,
@@ -153,6 +161,7 @@ def fetch_abstract(pmid: str) -> Summary:
             "journal": journal,
             "year": year,
             "abstract": "\n".join(abstract_parts) if abstract_parts else "",
+            "cite_as": f"{{{{cite:{pmid}}}}}",
         }
     except (urllib.error.URLError, OSError, ET.ParseError) as exc:
         return {"error": "fetch_failed", "message": f"Could not fetch abstract: {exc}"}
@@ -644,6 +653,7 @@ def run_deseq2(contrast: list[str], covariates: list[str] | None = None) -> Summ
 
     SESSION.deseq_results = results
     SESSION.deseq_design = formula
+    SESSION.deseq_contrast = [factor, test, ref]
 
     # Write to disk
     paths = SESSION.require_paths()
@@ -655,8 +665,8 @@ def run_deseq2(contrast: list[str], covariates: list[str] | None = None) -> Summ
     n_down = int((sig["log2FoldChange"] < 0).sum())
 
     # Top genes by padj
-    top_up = sig[sig["log2FoldChange"] > 0].nsmallest(5, "padj")
-    top_down = sig[sig["log2FoldChange"] < 0].nsmallest(5, "padj")
+    top_up = _ranked("up").head(5)
+    top_down = _ranked("down").head(5)
 
     def _gene_row(gene_id, row):
         out = {"gene_id": str(gene_id), "log2FC": round(float(row["log2FoldChange"]), 4), "padj": float(row["padj"])}
@@ -692,25 +702,44 @@ def run_deseq2(contrast: list[str], covariates: list[str] | None = None) -> Summ
     return result
 
 
-def get_top_genes(n: int = 20, direction: str = "both") -> Summary:
-    """Return top DE genes by adjusted p-value for the agent to inspect.
+def _ranked(direction: str, padj_max: float = _DE_PADJ, lfc_min: float = 0.0) -> pd.DataFrame:
+    """DE genes passing padj < padj_max and |log2FC| >= lfc_min in one direction, ranked
+    by padj, then |log2FC| (largest first), then gene ID — fully deterministic, so ties
+    (e.g. many genes with padj = 0) always resolve the same way. Used by every tool that
+    picks "top" genes, so tables, heatmap and enrichment agree."""
+    res = SESSION.deseq_results.dropna(subset=["padj"])
+    lfc = res["log2FoldChange"]
+    keep = (res["padj"] < padj_max) & (lfc.abs() >= lfc_min) & ((lfc > 0) if direction == "up" else (lfc < 0))
+    ranked = res[keep].assign(_abs_lfc=lfc[keep].abs(), _gene_id=res.index[keep].astype(str))
+    return ranked.sort_values(["padj", "_abs_lfc", "_gene_id"], ascending=[True, False, True]).drop(
+        columns=["_abs_lfc", "_gene_id"])
 
-    direction: "up" (log2FC > 0), "down" (log2FC < 0), or "both".
+
+def _gene_label(gene_id) -> str:
+    if SESSION.gene_names is not None and gene_id in SESSION.gene_names.index:
+        name = SESSION.gene_names.loc[gene_id]
+        if isinstance(name, str) and name:
+            return name
+    return str(gene_id)
+
+
+def get_top_genes(n: int = 20, direction: str = "both") -> Summary:
+    """Return top DE genes (padj < 0.05) for the agent to inspect, ranked by padj then |log2FC|.
+
+    direction: "up" (log2FC > 0), "down" (log2FC < 0), or "both". Informational only —
+    enrichment and report tables select genes themselves.
     """
     if SESSION.deseq_results is None:
         return {"error": "no_deseq_results", "message": "Call run_deseq2 before get_top_genes."}
+    if direction not in ("up", "down", "both"):
+        return {"error": "bad_direction", "message": "direction must be 'up', 'down' or 'both'."}
 
-    results = SESSION.deseq_results.dropna(subset=["padj"])
-    sig = results[results["padj"] < 0.05]
-
-    if direction == "up":
-        sig = sig[sig["log2FoldChange"] > 0]
-    elif direction == "down":
-        sig = sig[sig["log2FoldChange"] < 0]
-
-    top = sig.nsmallest(n, "padj")
+    directions = ["up", "down"] if direction == "both" else [direction]
+    top = pd.concat([_ranked(d) for d in directions])
+    if direction == "both":
+        top = top.sort_values("padj", kind="stable")
     genes = []
-    for gene_id, row in top.iterrows():
+    for gene_id, row in top.head(n).iterrows():
         entry = {
             "gene_id": str(gene_id),
             "log2FC": round(float(row["log2FoldChange"]), 4),
@@ -724,43 +753,65 @@ def get_top_genes(n: int = 20, direction: str = "both") -> Summary:
     return {
         "direction": direction,
         "n_returned": len(genes),
-        "n_significant_total": int(len(sig)),
+        "n_significant_total": int(len(top)),
         "genes": genes,
     }
 
 
-def run_enrichment(gene_list: list[str], organism: str = "human", label: str = "") -> Summary:
-    """Run gene set enrichment via Enrichr (GO and KEGG).
+def run_enrichment(
+    direction: str,
+    padj_max: float = _DE_PADJ,
+    lfc_min: float = 1.0,
+    max_genes: int = 500,
+    organism: str = "human",
+) -> Summary:
+    """Over-representation analysis via Enrichr (GO and KEGG) on DE genes selected here.
 
-    gene_list should contain gene symbols (not Ensembl IDs). Enrichr expects HGNC
-    symbols for human, MGI symbols for mouse.
-
-    label distinguishes separate enrichment runs (e.g. "upregulated", "downregulated").
-    Results accumulate across calls — each label gets its own entry and plot.
+    Genes are chosen by the tool from the DESeq2 results — never passed in — using
+    padj < padj_max and |log2FC| >= lfc_min in the given direction, ranked (padj, then
+    |log2FC|, then ID) and capped at max_genes. IDs are converted to gene symbols. The
+    exact input list and Enrichr's raw results are saved to analysis/.
     """
-    if not gene_list:
-        return {"error": "empty_gene_list", "message": "gene_list is empty."}
+    if SESSION.deseq_results is None:
+        return {"error": "no_deseq_results", "message": "Call run_deseq2 before run_enrichment."}
+    if direction not in ("up", "down"):
+        return {"error": "bad_direction", "message": "direction must be 'up' or 'down'."}
+    organism = organism.lower()
+    if organism not in _ENRICHR_LIBRARIES:
+        return {"error": "bad_organism", "message": f"organism must be one of {sorted(_ENRICHR_LIBRARIES)}."}
+    if max_genes < 1:
+        return {"error": "bad_max_genes", "message": "max_genes must be at least 1."}
+
+    passing = _ranked(direction, padj_max, lfc_min)
+    selected = passing.head(max_genes)
+    symbols, n_without_symbol = [], 0
+    for gene_id in selected.index:
+        name = _gene_label(gene_id)
+        if re.match(r"^(ENS[A-Z]*G\d+(\.\d+)?|\d+)$", name):
+            n_without_symbol += 1  # Ensembl/Entrez ID with no symbol: Enrichr can't use it
+            continue
+        symbols.append(name)
+    symbols = list(dict.fromkeys(symbols))
+    if not symbols:
+        return {"error": "no_genes", "message": (
+            f"No {direction}-regulated genes pass padj < {padj_max} and |log2FC| >= {lfc_min} "
+            f"({len(passing)} before symbol mapping). Consider a lower lfc_min (e.g. 0.585 = 1.5-fold).")}
 
     import gseapy
 
-    gene_sets = ["GO_Biological_Process_2023", "KEGG_2021_Human"]
-    if organism.lower() == "mouse":
-        gene_sets = ["GO_Biological_Process_2023", "KEGG_2019_Mouse"]
-    elif organism.lower() == "yeast":
-        gene_sets = ["GO_Biological_Process_2023", "KEGG_2019"]
-
+    gene_sets = _ENRICHR_LIBRARIES[organism]
     try:
-        enr = gseapy.enrichr(
-            gene_list=gene_list,
-            gene_sets=gene_sets,
-            organism=organism,
-            outdir=None,
-            no_plot=True,
-        )
+        enr = gseapy.enrichr(gene_list=symbols, gene_sets=gene_sets, organism=organism,
+                             outdir=None, no_plot=True)
     except Exception as exc:
         return {"error": "enrichr_failed", "message": str(exc)}
-
     results_df = enr.results
+
+    label = "upregulated" if direction == "up" else "downregulated"
+    paths = SESSION.require_paths()
+    paths.analysis_dir.mkdir(parents=True, exist_ok=True)
+    (paths.analysis_dir / f"enrichment_input_{label}.txt").write_text("\n".join(symbols) + "\n")
+    results_df.to_csv(paths.analysis_dir / f"enrichment_{label}.csv", index=False)
 
     enrichment = {}
     for gs in gene_sets:
@@ -776,22 +827,32 @@ def run_enrichment(gene_list: list[str], organism: str = "human", label: str = "
             for _, row in subset.iterrows()
         ]
 
-    # Accumulate results across calls (keyed by label)
+    selection = {
+        "direction": direction,
+        "padj_max": padj_max,
+        "lfc_min": lfc_min,
+        "max_genes": max_genes,
+        "n_passing": int(len(passing)),
+        "capped": bool(len(passing) > max_genes),
+        "n_without_symbol": n_without_symbol,
+    }
     if SESSION.enrichment_results is None:
         SESSION.enrichment_results = {}
-    label_key = label or "default"
-    SESSION.enrichment_results[label_key] = {
+    SESSION.enrichment_results[label] = {
         "organism": organism,
         "gene_sets": gene_sets,
-        "n_input_genes": len(gene_list),
+        "n_input_genes": len(symbols),
+        "selection": selection,
         "results": enrichment,
     }
 
     return {
+        "label": label,
         "organism": organism,
-        "label": label_key,
         "gene_sets_queried": gene_sets,
-        "n_input_genes": len(gene_list),
+        "n_input_genes": len(symbols),
+        "selection": selection,
+        "input_genes_file": str(paths.analysis_dir / f"enrichment_input_{label}.txt"),
         "enrichment": enrichment,
     }
 
@@ -856,7 +917,7 @@ def summarize_findings() -> Summary:
     if SESSION.enrichment_results:
         out["enrichment_inputs"] = {
             label: {"n_input_genes": e.get("n_input_genes"), "gene_sets": e.get("gene_sets"),
-                    "organism": e.get("organism")}
+                    "organism": e.get("organism"), "selection": e.get("selection")}
             for label, e in SESSION.enrichment_results.items()
         }
         top_terms = {}
@@ -867,35 +928,193 @@ def summarize_findings() -> Summary:
                 top_terms[key] = [t["term"] for t in terms[:5]]
         out["top_enrichment_terms"] = top_terms
 
-    # Actual software versions for the Methods section
+    versions = _software_versions()
+    pipeline = _pipeline_versions()
+    if pipeline:
+        out["pipeline_versions"] = pipeline
+    out["software_versions"] = versions
+
+    # What the report may cite: placeholder names with their current rendered values.
+    out["facts"] = _facts()
+    out["tables_available"] = sorted(_tables())
+    out["tables_required"] = _required_tables()
+    out["references"] = {pmid: f"{{{{cite:{pmid}}}}}" for pmid in SESSION.references}
+    return out
+
+
+def _software_versions() -> dict[str, str]:
     versions = {"python": __import__("sys").version.split()[0]}
     for pkg in ("numpy", "pandas", "pydeseq2", "matplotlib", "scipy", "gseapy"):
         try:
-            versions[pkg] = __import__(pkg).__version__
+            versions[pkg] = str(__import__(pkg).__version__)
         except (ImportError, AttributeError):
             pass
+    return versions
 
-    # Pipeline versions from nf-core software versions YAML
-    if SESSION.results_dir:
-        versions_yml = SESSION.results_dir / "pipeline_info" / "nf_core_rnaseq_software_mqc_versions.yml"
-        if versions_yml.is_file():
-            try:
-                import yaml
-                pipeline_versions = yaml.safe_load(versions_yml.read_text())
-            except Exception:
-                pipeline_versions = {}
-            workflow = pipeline_versions.get("Workflow", {})
-            if workflow:
-                out["pipeline_versions"] = {
-                    k: str(v) for k, v in workflow.items()
-                }
-            salmon_ver = (pipeline_versions.get("SALMON_QUANT") or {}).get("salmon")
-            if salmon_ver:
-                out.setdefault("pipeline_versions", {})["salmon"] = str(salmon_ver)
 
-    out["software_versions"] = versions
-
+def _pipeline_versions() -> dict[str, str]:
+    if not SESSION.results_dir:
+        return {}
+    versions_yml = SESSION.results_dir / "pipeline_info" / "nf_core_rnaseq_software_mqc_versions.yml"
+    if not versions_yml.is_file():
+        return {}
+    try:
+        import yaml
+        data = yaml.safe_load(versions_yml.read_text()) or {}
+    except Exception:
+        return {}
+    out = {k: str(v) for k, v in (data.get("Workflow") or {}).items()}
+    salmon = (data.get("SALMON_QUANT") or {}).get("salmon")
+    if salmon:
+        out["salmon"] = str(salmon)
     return out
+
+
+def _fmt_int(n) -> str:
+    return f"{int(n):,}"
+
+
+def _fmt_pct(part, whole) -> str:
+    return f"{100 * part / whole:.1f}%" if whole else "n/a"
+
+
+def _fmt_p(p) -> str:
+    # padj of exactly 0 is floating-point underflow, not a true zero
+    return "< 1e-300" if p == 0 else (f"{p:.2e}" if p < 0.001 else f"{p:.3f}")
+
+
+def _key(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", str(text).lower()).strip("_")
+
+
+def _facts() -> dict[str, str]:
+    """Every value the report may cite, rendered as text, keyed by placeholder name.
+
+    The single source for both summarize_findings (what the LLM reads) and write_report
+    (what gets printed), so the two can never disagree.
+    """
+    f: dict[str, str] = {}
+    source, provenance = _data_provenance()
+    f["provenance.data_source"] = source
+    for k, v in provenance.items():
+        if v is not None:
+            f[f"provenance.{k}"] = str(v).replace("_", " ") if k == "value_type" else str(v)
+
+    if SESSION.counts_df is not None:
+        counts = SESSION.counts_df
+        lib = counts.sum(axis=0)
+        f["samples.n"] = _fmt_int(counts.shape[1])
+        f["qc.library_size_min_millions"] = f"{lib.min() / 1e6:.1f}"
+        f["qc.library_size_max_millions"] = f"{lib.max() / 1e6:.1f}"
+    if SESSION.design_df is not None and SESSION.counts_df is not None:
+        design = SESSION.design_df.loc[[c for c in SESSION.counts_df.columns if c in SESSION.design_df.index]]
+        per = design["condition"].value_counts()
+        f["samples.conditions"] = ", ".join(map(str, per.index))
+        for cond, n in per.items():
+            f[f"samples.n_{_key(cond)}"] = _fmt_int(n)
+    if SESSION.filter_settings:
+        fs = SESSION.filter_settings
+        f["filter.min_count"] = _fmt_int(fs["min_count"])
+        f["filter.min_samples"] = _fmt_int(fs["min_samples"])
+        f["filter.genes_before"] = _fmt_int(fs["genes_before"])
+        f["filter.genes_after"] = _fmt_int(fs["genes_after"])
+        f["filter.genes_removed"] = _fmt_int(fs["genes_before"] - fs["genes_after"])
+
+    if SESSION.deseq_results is not None:
+        res = SESSION.deseq_results.dropna(subset=["padj"])
+        sig = res[res["padj"] < _DE_PADJ]
+        n_tested, n_sig = len(res), len(sig)
+        n_up = int((sig["log2FoldChange"] > 0).sum())
+        factor, test, ref = SESSION.deseq_contrast or ("condition", "?", "?")
+        f.update({
+            "de.contrast": f"{test} vs {ref}",
+            "de.test_level": str(test),
+            "de.reference_level": str(ref),
+            "de.factor": str(factor),
+            "de.design": str(SESSION.deseq_design),
+            "de.padj_threshold": str(_DE_PADJ),
+            "de.n_tested": _fmt_int(n_tested),
+            "de.n_significant": _fmt_int(n_sig),
+            "de.pct_significant": _fmt_pct(n_sig, n_tested),
+            "de.n_up": _fmt_int(n_up),
+            "de.pct_up": _fmt_pct(n_up, n_tested),
+            "de.n_down": _fmt_int(n_sig - n_up),
+            "de.pct_down": _fmt_pct(n_sig - n_up, n_tested),
+        })
+
+    for label, e in (SESSION.enrichment_results or {}).items():
+        sel = e.get("selection") or {}
+        pre = f"enrichment.{'up' if label == 'upregulated' else 'down' if label == 'downregulated' else _key(label)}"
+        f[f"{pre}.n_input_genes"] = _fmt_int(e.get("n_input_genes", 0))
+        f[f"{pre}.gene_sets"] = ", ".join(e.get("gene_sets", []))
+        f[f"{pre}.organism"] = str(e.get("organism"))
+        if sel:
+            f[f"{pre}.padj_max"] = str(sel["padj_max"])
+            f[f"{pre}.lfc_min"] = str(sel["lfc_min"])
+            f[f"{pre}.max_genes"] = _fmt_int(sel["max_genes"])
+            f[f"{pre}.n_passing"] = _fmt_int(sel["n_passing"])
+
+    for k, v in _software_versions().items():
+        f[f"versions.{k}"] = v
+    for k, v in _pipeline_versions().items():
+        f[f"pipeline.{_key(k)}"] = v
+    return f
+
+
+def _md_table(header: list[str], rows: list[list[str]]) -> str:
+    lines = ["| " + " | ".join(header) + " |", "|" + "---|" * len(header)]
+    lines += ["| " + " | ".join(str(c).replace("|", "\\|") for c in row) + " |" for row in rows]
+    return "\n".join(lines)
+
+
+def _tables() -> dict[str, str]:
+    """Report tables generated from results (placed with {{table:<name>}})."""
+    t: dict[str, str] = {}
+    facts = _facts()
+    if SESSION.counts_df is not None:
+        counts = SESSION.counts_df
+        rows = []
+        for s_ in counts.columns:
+            cond = (str(SESSION.design_df.loc[s_, "condition"])
+                    if SESSION.design_df is not None and s_ in SESSION.design_df.index else "")
+            rows.append([s_, cond, _fmt_int(counts[s_].sum()), _fmt_int((counts[s_] > 0).sum())])
+        t["qc"] = _md_table(["Sample", "Condition", "Total counts", "Genes detected"], rows)
+    if SESSION.deseq_results is not None:
+        t["de_summary"] = _md_table(["Measure", "Value"], [
+            ["Contrast", facts["de.contrast"]],
+            ["Design", f"`{facts['de.design']}`"],
+            ["Genes tested", facts["de.n_tested"]],
+            [f"Significant (padj < {_DE_PADJ})", f"{facts['de.n_significant']} ({facts['de.pct_significant']})"],
+            ["Up-regulated", f"{facts['de.n_up']} ({facts['de.pct_up']})"],
+            ["Down-regulated", f"{facts['de.n_down']} ({facts['de.pct_down']})"],
+        ])
+        for direction in ("up", "down"):
+            top = _ranked(direction).head(_TOP_TABLE_ROWS)
+            show_id = any(_gene_label(g) != str(g) for g in top.index)  # only when IDs aren't symbols
+            t[f"top_{direction}"] = _md_table(
+                ["Gene", *(["Gene ID"] if show_id else []), "log2FC", "padj", "baseMean"],
+                [[_gene_label(g), *([str(g)] if show_id else []), f"{r['log2FoldChange']:.2f}",
+                  _fmt_p(r["padj"]), f"{r['baseMean']:.0f}"]
+                 for g, r in top.iterrows()],
+            )
+    for label, e in (SESSION.enrichment_results or {}).items():
+        name = {"upregulated": "enrichment_up", "downregulated": "enrichment_down"}.get(label, f"enrichment_{_key(label)}")
+        rows = [[gs.replace("_", " "), term["term"], term["overlap"], _fmt_p(term["padj"])]
+                for gs, terms in e.get("results", {}).items() for term in terms]
+        t[name] = _md_table(["Library", "Term", "Overlap", "padj"], rows) if rows else "_No enriched terms returned._"
+    versions = {**_software_versions(), **{f"nf-core: {k}": v for k, v in _pipeline_versions().items()}}
+    t["versions"] = _md_table(["Software", "Version"], [[k, v] for k, v in versions.items()])
+    return t
+
+
+def _required_tables() -> list[str]:
+    """Tables the report must place, given what the analysis produced."""
+    req = []
+    if SESSION.deseq_results is not None:
+        req += ["de_summary", "top_up", "top_down"]
+    for label in SESSION.enrichment_results or {}:
+        req.append({"upregulated": "enrichment_up", "downregulated": "enrichment_down"}.get(label, f"enrichment_{_key(label)}"))
+    return req
 
 
 def _informative_columns() -> list[str]:
@@ -1154,8 +1373,8 @@ def _draw_figures(pca_color_by: list[str]) -> list[dict]:
         sig = SESSION.deseq_results.dropna(subset=["padj"])
         sig = sig[sig["padj"] < 0.05]
         if len(sig) > 0:
-            up = sig[sig["log2FoldChange"] > 0].nsmallest(_HEATMAP_PER_DIRECTION, "padj").index
-            down = sig[sig["log2FoldChange"] < 0].nsmallest(_HEATMAP_PER_DIRECTION, "padj").index
+            up = _ranked("up").head(_HEATMAP_PER_DIRECTION).index
+            down = _ranked("down").head(_HEATMAP_PER_DIRECTION).index
             top_genes = list(up) + list(down)
             n_top = len(top_genes)
             counts_top = SESSION.counts_df.loc[top_genes]
@@ -1187,7 +1406,7 @@ def _draw_figures(pca_color_by: list[str]) -> list[dict]:
             ax.spines["bottom"].set_visible(False)
             _save(fig, "de_heatmap.png",
                   f"Top {len(up)} up-regulated (above the line) and {len(down)} down-regulated "
-                  f"genes with padj < 0.05, each ranked by padj; z-scored log2(counts + 1) "
+                  f"genes with padj < 0.05, ranked by padj then |log2FC|; z-scored log2(counts + 1) "
                   f"across {len(heatmap_samples)} samples.")
 
     # --- Enrichment bar plots (one per label × gene set) ---
@@ -1255,6 +1474,7 @@ def generate_figures(pca_color_by: list[str] | None = None) -> Summary:
             f"(identifiers). Options: {informative}")}
 
     SESSION.figures = _draw_figures(pca_color_by)
+    SESSION.report_attempts = 0
     return {
         "figures": {f["path"]: f["caption"] for f in SESSION.figures},
         "pca_color_options": informative,
@@ -1263,32 +1483,108 @@ def generate_figures(pca_color_by: list[str] | None = None) -> Summary:
     }
 
 
-def write_report(report_markdown: str) -> Summary:
-    """Write the report. Image links must point at figures from generate_figures.
+_PLACEHOLDER = re.compile(r"\{\{\s*([^{}]+?)\s*\}\}")
+_MAX_REPORT_REJECTIONS = 2
 
-    Lossless fixes only: a link whose file name matches a generated figure is
-    rewritten to its figures/ path. Links to figures that don't exist are rejected
-    (nothing written). Under each figure a caption with its file path and facts is
-    inserted, and the standard disclaimer is appended.
+
+def _render_gene(query: str) -> str | None:
+    if SESSION.deseq_results is None:
+        return None
+    res = SESSION.deseq_results
+    if query in res.index:
+        gene_id = query
+    else:
+        names = SESSION.gene_names if SESSION.gene_names is not None else pd.Series(dtype=str)
+        hits = [g for g, n in names.items() if isinstance(n, str) and n == query and g in res.index]
+        if not hits:
+            hits = [g for g, n in names.items()
+                    if isinstance(n, str) and n.lower() == query.lower() and g in res.index]
+        if len(hits) != 1:
+            return None
+        gene_id = hits[0]
+    row = res.loc[gene_id]
+    padj = "n/a (not tested)" if pd.isna(row["padj"]) else _fmt_p(row["padj"])
+    return f"{_gene_label(gene_id)} (log2FC {row['log2FoldChange']:.2f}, padj {padj})"
+
+
+def _render_cite(pmid: str) -> str | None:
+    ref = SESSION.references.get(pmid)
+    if ref is None:
+        return None
+    authors = ref.get("authors") or []
+    surname = " ".join(authors[0].split()[:-1]) or authors[0] if authors else "Anonymous"
+    who = surname if len(authors) == 1 else f"{surname} et al."
+    return f"({who}, {ref.get('year') or 'n.d.'}; PMID: {pmid})"
+
+
+def write_report(report_markdown: str) -> Summary:
+    """Write the report. Every figure link, number, gene statistic, table and citation
+    must come from code:
+
+    - image links must point at figures from generate_figures (a missing figures/
+      prefix is fixed losslessly); a caption with path and facts is added beneath each;
+    - {{name}} renders a fact from summarize_findings; {{gene:SYMBOL}} renders the
+      gene's log2FC and padj; {{cite:PMID}} renders a fetched reference;
+      {{table:name}} inserts a code-generated table; required tables must be placed.
+
+    All problems are reported together and nothing is written. After
+    _MAX_REPORT_REJECTIONS rejections the report is written anyway with visible ⚠
+    markers where it's wrong. LLM text is never deleted. The standard disclaimer is
+    appended.
     """
     if SESSION.figures is None:
         return {"error": "no_figures", "message": "Call generate_figures before write_report."}
     by_name = {Path(f["path"]).name: f for f in SESSION.figures}
-
-    unknown = [m.group(2) for m in _IMAGE_LINK.finditer(report_markdown) if Path(m.group(2)).name not in by_name]
-    if unknown:
-        return {"error": "unknown_figures", "message": (
-            f"The report links figures that were not generated: {unknown}. Use only: "
-            f"{sorted(f['path'] for f in SESSION.figures)}. Nothing was written.")}
-
+    facts, tables = _facts(), _tables()
+    forced = SESSION.report_attempts >= _MAX_REPORT_REJECTIONS
+    problems: list[str] = []
     referenced: list[str] = []
 
-    def _link_with_caption(m: re.Match) -> str:
-        fig = by_name[Path(m.group(2)).name]
+    def _figure(m: re.Match) -> str:
+        target = m.group(2)
+        fig = by_name.get(Path(target).name)
+        if fig is None:
+            problems.append(f"figure not generated: {target}")
+            return f"{m.group(0)}\n\n*⚠ Figure not generated: `{target}`*"
         referenced.append(fig["path"])
         return f"![{m.group(1)}]({fig['path']})\n\n*File: `{fig['path']}` — {fig['caption']}*"
 
-    report = _IMAGE_LINK.sub(_link_with_caption, report_markdown)
+    placed_tables: set[str] = set()
+
+    def _placeholder(m: re.Match) -> str:
+        key = m.group(1)
+        kind, _, arg = key.partition(":")
+        if kind == "table" and arg in tables:
+            placed_tables.add(arg)
+            return f"\n\n{tables[arg]}\n\n"
+        rendered = (facts.get(key) if not arg else
+                    _render_gene(arg) if kind == "gene" else
+                    _render_cite(arg) if kind == "cite" else None)
+        if rendered is None:
+            problems.append(f"unknown placeholder: {{{{{key}}}}}")
+            return f"⚠[unknown: {{{{{key}}}}}]"
+        return rendered
+
+    report = _IMAGE_LINK.sub(_figure, report_markdown)
+    report = _PLACEHOLDER.sub(_placeholder, report)
+    missing = [t for t in _required_tables() if t not in placed_tables]
+    problems += [f"required table not placed: {{{{table:{t}}}}}" for t in missing]
+
+    if problems and not forced:
+        SESSION.report_attempts += 1
+        return {
+            "error": "report_problems",
+            "message": f"Nothing was written. Fix ALL of these and resubmit: {problems}",
+            "available_facts": sorted(facts),
+            "available_tables": sorted(tables),
+            "available_figures": sorted(f["path"] for f in SESSION.figures),
+            "fetched_references": sorted(SESSION.references),
+        }
+
+    if missing:
+        report += "\n\n## ⚠ Required tables the report did not place\n\n" + "\n\n".join(
+            tables[t] for t in missing)
+    report = re.sub(r"\n{3,}", "\n\n", report)  # blank-line runs left by table insertion
 
     # Strip trailing horizontal rules to avoid doubling before the disclaimer
     report = report.rstrip()
@@ -1297,11 +1593,15 @@ def write_report(report_markdown: str) -> Summary:
 
     paths = SESSION.require_paths()
     paths.analysis_report.write_text(report + _DISCLAIMER + "\n")
-    return {
+    result: Summary = {
         "report_path": str(paths.analysis_report),
         "figures_referenced": len(referenced),
         "unreferenced_figures": [f["path"] for f in SESSION.figures if f["path"] not in referenced],
     }
+    if problems:
+        result["warning"] = (f"Written after {SESSION.report_attempts} rejections with ⚠ markers — "
+                             f"the user must review these: {problems}")
+    return result
 
 
 def generate_report(report_markdown: str) -> Summary:

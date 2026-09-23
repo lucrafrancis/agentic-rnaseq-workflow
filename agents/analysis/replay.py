@@ -18,13 +18,14 @@ from pprint import pformat
 
 from core import config
 
-# Tools that only inform the agent — no effect on outputs. Fetches also need network.
+# Tools that only inform the agent — no effect on outputs.
 SKIP_TOOLS = frozenset({
-    "fetch_geo_metadata", "fetch_abstract", "inspect_counts", "get_top_genes", "summarize_findings",
+    "fetch_geo_metadata", "inspect_counts", "get_top_genes", "summarize_findings",
 })
 
 # Tools whose results depend on an external service and may differ on replay.
-NETWORK_TOOLS = frozenset({"run_enrichment"})
+# fetch_abstract is replayed because the report's {{cite:PMID}} placeholders need it.
+NETWORK_TOOLS = frozenset({"run_enrichment", "fetch_abstract"})
 
 
 def _git_commit() -> str:
@@ -79,8 +80,9 @@ Re-runs the same tool functions with the same arguments, without the LLM. Output
 to a new run directory (runs/<date>_{run_name}_replay/). Package versions are pinned by
 uv.lock at the commit above — check it out first if the code has changed since.
 
-Caveat: run_enrichment queries Enrichr live; its gene-set libraries change over time,
-so enrichment results may differ from the original run.
+Caveat: run_enrichment queries Enrichr live and fetch_abstract queries PubMed; Enrichr's
+gene-set libraries change over time, so enrichment results may differ from the original
+run (the original inputs and results are saved in analysis/enrichment_*.{{txt,csv}}).
 
   uv run python {out_path.relative_to(config.ROOT) if out_path.is_relative_to(config.ROOT) else out_path}
 """

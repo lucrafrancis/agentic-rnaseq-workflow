@@ -34,6 +34,9 @@ class Session:
         self.design_df: pd.DataFrame | None = None
         self.deseq_results: pd.DataFrame | None = None
         self.deseq_design: str | None = None
+        self.deseq_contrast: list[str] | None = None
+        self.references: dict[str, dict[str, Any]] = {}  # PMID -> fetched abstract metadata
+        self.report_attempts: int = 0
         self.counts_path: Path | None = None
         self.filter_settings: dict[str, Any] | None = None
         self.figures: list[dict] | None = None  # from generate_figures: path + caption

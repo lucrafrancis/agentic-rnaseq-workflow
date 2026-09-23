@@ -190,36 +190,37 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
     {
         "name": "run_enrichment",
-        "description": "Run gene set enrichment via Enrichr (GO and KEGG). Pass gene "
-        "symbols (gene_name), not Ensembl IDs. Requires a non-empty gene list.",
+        "description": "Over-representation analysis via Enrichr (GO Biological Process + KEGG) "
+        "for one direction. The tool selects the genes itself from the DESeq2 results — you never "
+        "pass gene names: padj < padj_max AND |log2FC| >= lfc_min, split by direction, ranked by "
+        "padj then |log2FC|, capped at max_genes, converted to gene symbols. Call once with "
+        "direction='up' and once with direction='down'. Saves the exact input genes and "
+        "Enrichr's raw results to analysis/.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "gene_list": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Gene symbols to test for enrichment.",
+                "direction": {"type": "string", "enum": ["up", "down"]},
+                "padj_max": {"type": "number", "description": "Adjusted p-value cutoff (default 0.05)."},
+                "lfc_min": {
+                    "type": "number",
+                    "description": "Minimum |log2FC| (default 1.0 = 2-fold). Lower (e.g. 0.585 = "
+                    "1.5-fold) only if too few genes pass; say so in the report.",
                 },
-                "organism": {
-                    "type": "string",
-                    "description": "Organism: 'human', 'mouse', or 'yeast' (default 'human').",
+                "max_genes": {
+                    "type": "integer",
+                    "description": "Cap on genes per direction (default 500), taken in rank order.",
                 },
-                "label": {
-                    "type": "string",
-                    "description": "Label for this enrichment run, e.g. 'upregulated' or "
-                    "'downregulated'. Results accumulate across calls — each label gets "
-                    "its own figures (enrichment_<label>_<gene_set>.png).",
-                },
+                "organism": {"type": "string", "enum": ["human", "mouse", "yeast"]},
             },
-            "required": ["gene_list"],
+            "required": ["direction"],
         },
     },
     {
         "name": "summarize_findings",
-        "description": "Consolidate the analysis state (QC, DE, enrichment) into one "
-        "factual summary including data source, software versions, and all results. "
-        "Use the returned software_versions for the Methods section — do not guess. "
-        "Non-mutating.",
+        "description": "Consolidate the analysis state into one factual summary. Returns "
+        "'facts' (placeholder names with their current values, for {{name}} in the report), "
+        "'tables_available' and 'tables_required' (for {{table:name}}), 'references' "
+        "(for {{cite:PMID}}), plus provenance, versions and results. Non-mutating.",
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
@@ -242,10 +243,13 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
     {
         "name": "write_report",
-        "description": "Write the final Markdown report. Link figures only by the paths "
-        "returned by generate_figures — links to other figures are rejected and nothing is "
-        "written. The tool inserts each figure's file path and factual caption beneath it and "
-        "appends the standard disclaimer. Call last.",
+        "description": "Write the final Markdown report. Never type a number, statistic, "
+        "parameter, version or citation — use placeholders: {{fact.name}} (from "
+        "summarize_findings facts), {{gene:SYMBOL}} (renders log2FC and padj), {{cite:PMID}} "
+        "(fetched references only), {{table:name}} (code-generated tables; every table in "
+        "tables_required must be placed). Link figures only by paths from generate_figures. "
+        "Any problem rejects the whole report with a list of all issues — fix them all and "
+        "resubmit. The tool adds figure captions and the standard disclaimer. Call last.",
         "input_schema": {
             "type": "object",
             "properties": {

@@ -113,6 +113,8 @@ class TestFetchAbstract:
         assert result["journal"] == "Nature Genetics"
         assert result["year"] == "2024"
         assert "HDAC inhibitor" in result["abstract"]
+        assert result["cite_as"] == "{{cite:12345678}}"
+        assert SESSION.references["12345678"]["authors"] == ["Smith AB", "Jones CD"]
 
     def test_handles_network_error(self, monkeypatch: pytest.MonkeyPatch):
         import urllib.error
@@ -332,54 +334,104 @@ class TestGetTopGenes:
             assert "padj" in gene
 
 
+def _mock_enrichr(monkeypatch, captured: list | None = None):
+    import pandas as pd
+    import gseapy
+
+    def enrichr(**kw):
+        if captured is not None:
+            captured.append(kw["gene_list"])
+
+        class Result:
+            results = pd.DataFrame({
+                "Gene_set": ["GO_Biological_Process_2023", "KEGG_2021_Human"],
+                "Term": ["regulation of transcription (GO:0006355)", "Pathway X"],
+                "P-value": [0.001, 0.002], "Adjusted P-value": [0.01, 0.02],
+                "Overlap": ["5/100", "3/40"], "Genes": ["Gene1;Gene2", "Gene3"],
+            })
+        return Result()
+
+    monkeypatch.setattr(gseapy, "enrichr", enrichr)
+
+
 class TestRunEnrichment:
-    def test_rejects_empty_list(self):
-        result = run_enrichment([])
-        assert result["error"] == "empty_gene_list"
+    def test_requires_deseq(self):
+        assert run_enrichment("up")["error"] == "no_deseq_results"
 
-    def test_runs_with_mock(self, monkeypatch: pytest.MonkeyPatch):
+    @pytest.mark.parametrize("kwargs,error", [
+        ({"direction": "sideways"}, "bad_direction"),
+        ({"direction": "up", "organism": "zebrafish"}, "bad_organism"),
+        ({"direction": "up", "max_genes": 0}, "bad_max_genes"),
+    ])
+    def test_validation(self, tmp_path, kwargs, error):
+        _analysed(tmp_path)
+        assert run_enrichment(**kwargs)["error"] == error
+
+    def test_selects_genes_itself(self, tmp_path, monkeypatch):
+        from agents.analysis.tools import _ranked
+        _analysed(tmp_path)
+        captured: list = []
+        _mock_enrichr(monkeypatch, captured)
+        result = run_enrichment("down")
+        expected = [f"Gene{int(g[1:])}" for g in _ranked("down", 0.05, 1.0).index]
+        assert captured[0] == expected  # symbols, in rank order, chosen by the tool
+        assert result["selection"]["n_passing"] == len(expected)
+        assert result["label"] == "downregulated"
+        saved = (SESSION.paths.analysis_dir / "enrichment_input_downregulated.txt").read_text().split()
+        assert saved == expected
+        assert (SESSION.paths.analysis_dir / "enrichment_downregulated.csv").is_file()
+
+    def test_cap_and_thresholds(self, tmp_path, monkeypatch):
+        _analysed(tmp_path)
+        captured: list = []
+        _mock_enrichr(monkeypatch, captured)
+        result = run_enrichment("up", max_genes=5)
+        assert len(captured[0]) == 5
+        assert result["selection"]["capped"] is True
+        assert run_enrichment("up", lfc_min=50)["error"] == "no_genes"
+
+    def test_both_directions_accumulate(self, tmp_path, monkeypatch):
+        _analysed(tmp_path)
+        _mock_enrichr(monkeypatch)
+        run_enrichment("up")
+        run_enrichment("down")
+        assert set(SESSION.enrichment_results) == {"upregulated", "downregulated"}
+
+
+class TestTableFormatting:
+    def test_underflow_padj(self):
+        from agents.analysis.tools import _fmt_p
+        assert _fmt_p(0.0) == "< 1e-300"
+        assert _fmt_p(2.5e-8) == "2.50e-08"
+        assert _fmt_p(0.0123) == "0.012"
+
+    def test_gene_id_column_only_when_ids_are_not_symbols(self):
         import pandas as pd
-        import gseapy
+        from agents.analysis.tools import _tables
+        SESSION.counts_df = None
+        SESSION.deseq_results = pd.DataFrame(
+            {"log2FoldChange": [2.0, -2.0], "padj": [0.001, 0.002], "baseMean": [10.0, 20.0]},
+            index=["CTGF", "KDR"])
+        SESSION.deseq_design, SESSION.deseq_contrast = "~condition", ["condition", "B", "A"]
+        assert _tables()["top_up"].splitlines()[0] == "| Gene | log2FC | padj | baseMean |"
+        SESSION.gene_names = pd.Series({"CTGF": "CTGF", "KDR": "KDR"})
+        SESSION.deseq_results.index = ["ENSG1", "ENSG2"]
+        SESSION.gene_names = pd.Series({"ENSG1": "CTGF", "ENSG2": "KDR"})
+        assert _tables()["top_up"].splitlines()[0] == "| Gene | Gene ID | log2FC | padj | baseMean |"
 
-        mock_df = pd.DataFrame({
-            "Gene_set": ["GO_Biological_Process_2023"],
-            "Term": ["regulation of transcription (GO:0006355)"],
-            "P-value": [0.001],
-            "Adjusted P-value": [0.01],
-            "Overlap": ["5/100"],
-            "Genes": ["Gene1;Gene2;Gene3"],
-        })
 
-        class MockResult:
-            results = mock_df
-
-        monkeypatch.setattr(gseapy, "enrichr", lambda **kw: MockResult())
-        result = run_enrichment(["Gene1", "Gene2", "Gene3"])
-        assert "error" not in result
-        assert "enrichment" in result
-
-    def test_label_accumulates(self, monkeypatch: pytest.MonkeyPatch):
+class TestRanking:
+    def test_ties_broken_by_abs_lfc_then_id(self):
         import pandas as pd
-        import gseapy
-
-        mock_df = pd.DataFrame({
-            "Gene_set": ["GO_Biological_Process_2023"],
-            "Term": ["some term"],
-            "P-value": [0.001],
-            "Adjusted P-value": [0.01],
-            "Overlap": ["3/50"],
-            "Genes": ["A;B;C"],
-        })
-
-        class MockResult:
-            results = mock_df
-
-        monkeypatch.setattr(gseapy, "enrichr", lambda **kw: MockResult())
-        run_enrichment(["Gene1"], label="upregulated")
-        run_enrichment(["Gene2"], label="downregulated")
-        assert "upregulated" in SESSION.enrichment_results
-        assert "downregulated" in SESSION.enrichment_results
-        assert "results" in SESSION.enrichment_results["upregulated"]
+        from agents.analysis.tools import _ranked
+        SESSION.deseq_results = pd.DataFrame({
+            "log2FoldChange": [2.0, 5.0, 5.0, 3.0, -4.0, 0.5],
+            "padj": [0.0, 0.0, 0.0, 1e-5, 0.0, 1e-9],
+            "baseMean": [1.0] * 6,
+        }, index=["B", "C", "A", "D", "E", "F"])
+        assert list(_ranked("up").index) == ["A", "C", "B", "F", "D"]
+        assert list(_ranked("up", lfc_min=1.0).index) == ["A", "C", "B", "D"]
+        assert list(_ranked("down").index) == ["E"]
 
 
 class TestSummarizeFindings:
@@ -472,6 +524,9 @@ class TestGenerateFigures:
         assert generate_figures(pca_color_by=["gsm"])["error"] == "bad_pca_columns"
 
 
+TABLES = "{{table:de_summary}}\n\n{{table:top_up}}\n\n{{table:top_down}}\n\n"
+
+
 class TestWriteReport:
     def test_requires_figures(self, tmp_path: Path):
         _analysed(tmp_path)
@@ -480,7 +535,7 @@ class TestWriteReport:
     def test_captions_and_lossless_path_fix(self, tmp_path: Path):
         _analysed(tmp_path)
         generate_figures()
-        md = "# R\n\n![Volcano](volcano.png)\n\n![Heat](figures/de_heatmap.png)\n\nText."
+        md = "# R\n\n![Volcano](volcano.png)\n\n![Heat](figures/de_heatmap.png)\n\nText.\n\n" + TABLES
         result = write_report(md)
         content = Path(result["report_path"]).read_text()
         assert "![Volcano](figures/volcano.png)" in content  # prefix added
@@ -492,15 +547,15 @@ class TestWriteReport:
     def test_unknown_figure_rejected_nothing_written(self, tmp_path: Path):
         _analysed(tmp_path)
         generate_figures()
-        result = write_report("# R\n\n![Made up](figures/invented_plot.png)")
-        assert result["error"] == "unknown_figures"
+        result = write_report("# R\n\n![Made up](figures/invented_plot.png)\n\n" + TABLES)
+        assert result["error"] == "report_problems"
         assert "invented_plot.png" in result["message"]
         assert not SESSION.paths.analysis_report.exists()
 
     def test_llm_text_kept_and_one_standard_disclaimer_appended(self, tmp_path: Path):
         _analysed(tmp_path)
         generate_figures()
-        md = "# R\n\nDisclaimer: only 3 replicates — exploratory.\n\n---\n"
+        md = "# R\n\n" + TABLES + "Disclaimer: only 3 replicates — exploratory.\n\n---\n"
         content = Path(write_report(md)["report_path"]).read_text()
         assert "Disclaimer: only 3 replicates — exploratory." in content  # never removed
         assert content.count("**Disclaimer:** This report was generated by an AI system.") == 1
@@ -508,8 +563,101 @@ class TestWriteReport:
 
     def test_generate_report_back_compat(self, tmp_path: Path):
         _analysed(tmp_path)
-        result = generate_report("# R\n\n![PCA](figures/pca.png)")
+        result = generate_report("# R\n\n![PCA](figures/pca.png)\n\n" + TABLES)
         assert Path(result["report_path"]).is_file()
+
+
+class TestPlaceholders:
+    def _ready(self, tmp_path, monkeypatch):
+        _analysed(tmp_path)
+        _mock_enrichr(monkeypatch)
+        run_enrichment("up")
+        run_enrichment("down")
+        generate_figures()
+
+    def _full(self, body: str) -> str:
+        return (body + "\n\n" + TABLES + "{{table:enrichment_up}}\n\n{{table:enrichment_down}}\n")
+
+    def test_facts_render_from_results(self, tmp_path, monkeypatch):
+        self._ready(tmp_path, monkeypatch)
+        facts = summarize_findings()["facts"]
+        md = self._full("Of {{de.n_tested}} genes, {{de.n_significant}} ({{de.pct_significant}}) were "
+                        "significant; design {{de.design}}; filter {{filter.min_count}}; "
+                        "PyDESeq2 {{versions.pydeseq2}}; source {{provenance.data_source}}.")
+        content = Path(write_report(md)["report_path"]).read_text()
+        for key in ("de.n_tested", "de.n_significant", "de.pct_significant", "de.design", "versions.pydeseq2"):
+            assert facts[key] in content
+        assert "{{" not in content
+
+    def test_fact_values_are_correct(self, tmp_path, monkeypatch):
+        self._ready(tmp_path, monkeypatch)
+        facts = summarize_findings()["facts"]
+        res = SESSION.deseq_results.dropna(subset=["padj"])
+        sig = res[res["padj"] < 0.05]
+        assert facts["de.n_tested"] == f"{len(res):,}"
+        assert facts["de.n_up"] == f"{int((sig['log2FoldChange'] > 0).sum()):,}"
+        assert facts["de.pct_significant"] == f"{100 * len(sig) / len(res):.1f}%"
+        assert facts["de.contrast"] == "KO vs WT"
+        assert facts["samples.n_ko"] == "3"
+        assert facts["enrichment.up.lfc_min"] == "1.0"
+
+    def test_tables_come_from_results(self, tmp_path, monkeypatch):
+        from agents.analysis.tools import _ranked
+        self._ready(tmp_path, monkeypatch)
+        content = Path(write_report(self._full("x"))["report_path"]).read_text()
+        top_gene = _ranked("up").index[0]
+        assert f"| Gene{int(top_gene[1:])} | {top_gene} |" in content
+        assert "| Genes tested |" in content
+        assert "regulation of transcription (GO:0006355)" in content
+
+    def test_gene_and_cite(self, tmp_path, monkeypatch):
+        from agents.analysis.tools import _ranked
+        self._ready(tmp_path, monkeypatch)
+        SESSION.references["33010822"] = {"authors": ["Jacob F", "Pather SR"], "year": "2020"}
+        gene = f"Gene{int(_ranked('up').index[0][1:])}"
+        content = Path(write_report(self._full(f"{{{{gene:{gene}}}}} rose {{{{cite:33010822}}}}."))
+                       ["report_path"]).read_text()
+        assert f"{gene} (log2FC " in content and ", padj " in content
+        assert "(Jacob et al., 2020; PMID: 33010822)" in content
+
+    def test_all_problems_reported_at_once(self, tmp_path, monkeypatch):
+        self._ready(tmp_path, monkeypatch)
+        result = write_report("{{de.n_madeup}} {{gene:NOTAGENE}} {{cite:123}} ![x](figures/nope.png)")
+        assert result["error"] == "report_problems"
+        msg = result["message"]
+        for bit in ("de.n_madeup", "gene:NOTAGENE", "cite:123", "nope.png",
+                    "table:de_summary", "table:enrichment_down"):
+            assert bit in msg
+        assert "de.n_significant" in result["available_facts"]
+        assert not SESSION.paths.analysis_report.exists()
+
+    def test_written_with_markers_after_two_rejections(self, tmp_path, monkeypatch):
+        self._ready(tmp_path, monkeypatch)
+        bad = "Result: {{de.n_madeup}}. Kept text."
+        assert "error" in write_report(bad)
+        assert "error" in write_report(bad)
+        result = write_report(bad)
+        content = Path(result["report_path"]).read_text()
+        assert "⚠[unknown: {{de.n_madeup}}]" in content
+        assert "Kept text." in content
+        assert "## ⚠ Required tables the report did not place" in content
+        assert "| Genes tested |" in content
+        assert "warning" in result
+
+    def test_rejection_counter_resets_with_new_figures(self, tmp_path, monkeypatch):
+        self._ready(tmp_path, monkeypatch)
+        write_report("{{nope}}")
+        write_report("{{nope}}")
+        generate_figures()
+        assert write_report("{{nope}}")["error"] == "report_problems"
+
+    def test_no_de_no_required_tables(self, count_matrix_tsv):
+        SESSION.begin_run("test")
+        load_counts(str(count_matrix_tsv))
+        generate_figures()
+        result = write_report("QC only: {{samples.n}} samples.\n\n{{table:qc}}")
+        assert "error" not in result
+        assert "4 samples" in Path(result["report_path"]).read_text()
 
 
 class TestProvenance:
