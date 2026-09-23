@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import csv
 import json
 import re
 import shutil
@@ -56,8 +57,11 @@ def main() -> None:
         original_prompt = prompt_file.read_text().strip() if prompt_file.is_file() else ""
         if not original_prompt:
             print("Warning: no prompt.txt in run directory.")
-        results_dir = target / "results"
-        _run_analysis(str(results_dir) if results_dir.is_dir() else None, original_prompt=original_prompt)
+        if SESSION.mode == "analysis":
+            _run_analysis_only(original_prompt, skip_download=args.skip_download)
+        else:
+            results_dir = target / "results"
+            _run_analysis(str(results_dir) if results_dir.is_dir() else None, original_prompt=original_prompt)
         return
 
     if args.resume:
@@ -68,7 +72,11 @@ def main() -> None:
         if not prompt_file.is_file():
             sys.exit(f"No prompt.txt in {target}. Cannot resume.")
         print(f"Resuming run: {target}")
-        _run_pipeline(prompt_file.read_text().strip(), skip_download=args.skip_download)
+        prompt = prompt_file.read_text().strip()
+        if SESSION.mode == "analysis":
+            _run_analysis_only(prompt, skip_download=args.skip_download)
+        else:
+            _run_pipeline(prompt, skip_download=args.skip_download)
         return
 
     if not target.is_file():
@@ -78,14 +86,73 @@ def main() -> None:
         sys.exit("Prompt file is empty.")
 
     project_name = target.resolve().parent.name.replace(" ", "_")
-    SESSION.begin_run(project_name, source_prompt=target)
+    SESSION.begin_run(project_name, source_prompt=target, mode="analysis" if args.analyze else "pipeline")
     shutil.copy2(target, SESSION.paths.dir / "prompt.txt")
     print(f"Run directory: {SESSION.paths.dir}")
 
     if args.analyze:
-        _run_analysis(None, original_prompt=prompt)
+        _run_analysis_only(prompt, skip_download=args.skip_download)
     else:
         _run_pipeline(prompt, skip_download=args.skip_download)
+
+
+def _run_analysis_only(prompt: str, *, skip_download: bool = False) -> None:
+    """Analysis-only runs: fetch a GEO count matrix if the prompt has an accession, then
+    analyse. Never touches the samplesheet/nextflow stages."""
+    if SESSION.is_complete("download"):
+        print("Stage 0: count matrix already approved, skipping.")
+    elif skip_download or not _extract_accession(prompt):
+        print("Stage 0: using the local count matrix described in the prompt.")
+        SESSION.mark_stage_complete("download")
+    else:
+        _counts_stage(prompt)
+    _run_analysis(None, original_prompt=prompt)
+
+
+def _counts_stage(prompt: str) -> None:
+    """Stage 0 (counts mode): fetch a processed count matrix + design from GEO, then approve."""
+    paths = SESSION.require_paths()
+    print("\n--- Stage 0: GEO Count Matrix ---")
+    if paths.counts_metadata.is_file() and paths.design.is_file():
+        print("Found an unapproved count matrix, presenting for approval.")
+    else:
+        from agents.download.loop import run_counts_agent
+        run_counts_agent(prompt)
+        if not (paths.counts_metadata.is_file() and paths.design.is_file()):
+            sys.exit("Counts agent did not produce a count matrix and design. Check the logs above.")
+
+    meta = json.loads(paths.counts_metadata.read_text())
+    design = {row["sample"]: row for row in csv.DictReader(paths.design.open())}
+    covariates = [c for c in next(iter(design.values())) if c not in ("sample", "condition", "gsm", "title")]
+    lines = [
+        f"Source: {meta['filename']} ({meta['source']})",
+        f"Values: {meta['value_type']}  |  genes: {meta['n_genes']}  |  gene IDs: {meta['gene_id_type']}"
+        + (f"  |  duplicate IDs summed: {meta['n_duplicates_summed']}" if meta["n_duplicates_summed"] else ""),
+    ]
+    if meta["value_type"] != "raw_integer_counts":
+        lines.append("WARNING: values are not raw integer counts — DESeq2 may not be appropriate.")
+    lines += ["", f"{'file column':<28} {'GSM':<12} {'sample':<28} condition" + "".join(f" | {c}" for c in covariates)]
+    for s in meta["samples"]:
+        row = design.get(s["sample"], {})
+        lines.append(
+            f"{s['file_column']:<28} {s['gsm']:<12} {s['sample']:<28} {row.get('condition', '?')}"
+            + "".join(f" | {row.get(c, '')}" for c in covariates)
+        )
+    if meta["dropped_columns"]:
+        lines.append(f"\nDropped file columns: {', '.join(meta['dropped_columns'][:15])}")
+    if meta["unmapped_gsms"]:
+        lines.append(f"GSMs not included: {', '.join(meta['unmapped_gsms'][:15])}")
+
+    result = present_for_approval(
+        title="GEO count matrix and design",
+        preview="\n".join(lines),
+        file_path=paths.design,
+        summary_stats={"samples": len(meta["samples"]), "counts": str(paths.counts_matrix)},
+    )
+    if not result.approved:
+        print(f"Count matrix rejected. Reason: {result.reason or 'none given'}")
+        sys.exit("Adjust the prompt (e.g. which file or samples to use) and start a new run.")
+    SESSION.mark_stage_complete("download")
 
 
 def _run_pipeline(prompt: str, *, skip_download: bool = False) -> None:
@@ -398,6 +465,8 @@ def _run_analysis(results_dir: str | None, *, original_prompt: str = "") -> None
             f"The prompt was read from {SESSION.source_prompt}; relative paths in it may be "
             f"relative to that file's directory or to the current directory ({Path.cwd()})."
         )
+    if paths.counts_matrix.is_file():
+        context_parts.append(f"The approved count matrix (fetched from GEO) is at: {paths.counts_matrix}")
     if paths.design.is_file():
         context_parts.append(f"A design CSV is available at: {paths.design}")
 

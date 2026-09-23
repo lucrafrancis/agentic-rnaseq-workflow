@@ -18,6 +18,7 @@ def run_analysis_agent(user_prompt: str | list) -> list[dict]:
         tool_schemas=TOOL_SCHEMAS,
         tool_functions=TOOL_FUNCTIONS,
         user_prompt=user_prompt,
+        label="analysis",
         log_path=SESSION.require_paths().analysis_tool_log,
         hide_args=frozenset({"report_markdown", "gene_list", "rows"}),
     )

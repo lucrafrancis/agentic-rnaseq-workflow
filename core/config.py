@@ -18,6 +18,7 @@ MAX_TURNS = 40
 # --- Paths -------------------------------------------------------------------
 ROOT = Path(__file__).resolve().parent.parent
 RUNS_DIR = ROOT / "runs"
+REFERENCE_DIR = ROOT / "data" / "reference"  # shared cache (e.g. NCBI gene_info), gitignored
 
 # --- nf-core/rnaseq defaults ------------------------------------------------
 NFCORE_PIPELINE = "nf-core/rnaseq"
@@ -51,6 +52,11 @@ class RunPaths:
         return self.dir / "nextflow.log"
 
     @property
+    def usage_log(self) -> Path:
+        """Token usage per agent run — for tracking API spend."""
+        return self.dir / "usage.jsonl"
+
+    @property
     def tool_log(self) -> Path:
         return self.dir / "tool_calls.jsonl"
 
@@ -81,6 +87,23 @@ class RunPaths:
     @property
     def download_metadata(self) -> Path:
         return self.dir / "download_metadata.json"
+
+    @property
+    def geo_dir(self) -> Path:
+        """Raw GEO supplementary files downloaded in counts mode (kept for provenance)."""
+        return self.dir / "geo"
+
+    @property
+    def geo_sources(self) -> Path:
+        return self.dir / "geo_sources.json"
+
+    @property
+    def counts_matrix(self) -> Path:
+        return self.dir / "counts.tsv"
+
+    @property
+    def counts_metadata(self) -> Path:
+        return self.dir / "counts_metadata.json"
 
     @property
     def design(self) -> Path:

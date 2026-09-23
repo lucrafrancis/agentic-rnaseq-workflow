@@ -25,6 +25,7 @@ def run_agent_loop(
     emoji: str = "\U0001f9e0",
     log_path: Path | None = None,
     hide_args: frozenset[str] = frozenset(),
+    label: str = "agent",
 ) -> list[dict]:
     """Run an agent loop to completion.
 
@@ -44,12 +45,15 @@ def run_agent_loop(
         Where to write tool call logs. Defaults to the run's tool_calls.jsonl.
     hide_args:
         Tool argument keys to omit from the console display.
+    label:
+        Name recorded in the run's usage.jsonl.
     """
     if log_path is None:
         log_path = SESSION.require_paths().tool_log
 
     client = anthropic.Anthropic()
     messages: list[dict] = [{"role": "user", "content": user_prompt}]
+    usage = new_usage()
 
     for _turn in range(config.MAX_TURNS):
         response = client.messages.create(
@@ -58,7 +62,12 @@ def run_agent_loop(
             system=system_prompt,
             tools=tool_schemas,
             messages=messages,
+            # Automatic caching: the breakpoint follows the growing history, so each turn
+            # re-reads tools + system + prior turns from cache. (Haiku 4.5 only caches
+            # prefixes >= 4096 tokens, so early turns may not cache — that's expected.)
+            cache_control={"type": "ephemeral"},
         )
+        add_usage(usage, response.usage)
         messages.append({"role": "assistant", "content": response.content})
 
         for block in response.content:
@@ -89,7 +98,31 @@ def run_agent_loop(
     else:
         print(f"\n⚠️  Agent used all {config.MAX_TURNS} turns without finishing.")
 
+    log_usage(label, config.MODEL, usage)
     return messages
+
+
+def new_usage() -> dict[str, int]:
+    return {"requests": 0, "input_tokens": 0, "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0, "output_tokens": 0}
+
+
+def add_usage(totals: dict[str, int], usage: Any) -> None:
+    totals["requests"] += 1
+    for key in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens"):
+        totals[key] += getattr(usage, key, None) or 0
+
+
+def log_usage(label: str, model: str, totals: dict[str, int]) -> None:
+    """Print a one-line token summary and append it to the run's usage.jsonl."""
+    total_in = totals["input_tokens"] + totals["cache_creation_input_tokens"] + totals["cache_read_input_tokens"]
+    cached_pct = 100 * totals["cache_read_input_tokens"] / total_in if total_in else 0
+    print(f"\n📊 {label}: {totals['requests']} requests, {total_in:,} input tokens "
+          f"({cached_pct:.0f}% from cache), {totals['output_tokens']:,} output tokens")
+    if SESSION.paths is None:
+        return
+    with SESSION.paths.usage_log.open("a") as f:
+        f.write(json.dumps({"agent": label, "model": model, **totals}) + "\n")
 
 
 def _run_tool(

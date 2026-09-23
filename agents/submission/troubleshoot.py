@@ -24,6 +24,7 @@ import anthropic
 
 from agents.submission.params import SubmissionParams
 from core import config
+from core.loop import add_usage, log_usage, new_usage
 from core.session import SESSION
 
 logger = logging.getLogger(__name__)
@@ -257,69 +258,75 @@ def diagnose_and_propose(
     print(f"  Troubleshooting — attempt {attempt}/{MAX_RETRIES}")
     print(f"{'='*60}")
 
-    _MAX_DIAGNOSTIC_TURNS = 20
-    for _diag_turn in range(_MAX_DIAGNOSTIC_TURNS):
-        response = client.messages.create(
-            model=config.MODEL_SONNET,
-            max_tokens=2048,
-            system=_SYSTEM_PROMPT,
-            tools=[_CHECK_ENV_TOOL, _PROPOSE_FIX_TOOL],
-            messages=messages,
-        )
-        messages.append({"role": "assistant", "content": response.content})
+    usage = new_usage()
+    try:
+        _MAX_DIAGNOSTIC_TURNS = 20
+        for _diag_turn in range(_MAX_DIAGNOSTIC_TURNS):
+            response = client.messages.create(
+                model=config.MODEL_SONNET,
+                max_tokens=2048,
+                system=_SYSTEM_PROMPT,
+                tools=[_CHECK_ENV_TOOL, _PROPOSE_FIX_TOOL],
+                messages=messages,
+                cache_control={"type": "ephemeral"},  # full log is re-sent every turn
+            )
+            add_usage(usage, response.usage)
+            messages.append({"role": "assistant", "content": response.content})
 
-        for block in response.content:
-            if hasattr(block, "text") and block.text.strip():
-                print(f"\n🔍 {block.text.strip()}")
-
-        if response.stop_reason == "tool_use":
-            tool_results = []
-            has_proposal = False
             for block in response.content:
-                if block.type != "tool_use":
+                if hasattr(block, "text") and block.text.strip():
+                    print(f"\n🔍 {block.text.strip()}")
+
+            if response.stop_reason == "tool_use":
+                tool_results = []
+                has_proposal = False
+                for block in response.content:
+                    if block.type != "tool_use":
+                        continue
+                    if block.name == "check_environment":
+                        result = _run_safe_command(block.input["command"])
+                        print(f"\n🔧 check_environment({block.input['command']})")
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": json.dumps(result),
+                        })
+                    elif block.name == "propose_fix":
+                        has_proposal = True
+                        proposal = block.input
+                        _log_event({"event": "diagnosis", "attempt": attempt, "proposal": proposal})
+                        _print_proposal(proposal)
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": "Proposal shown to user. Waiting for their response.",
+                        })
+                messages.append({"role": "user", "content": tool_results})
+                if not has_proposal:
                     continue
-                if block.name == "check_environment":
-                    result = _run_safe_command(block.input["command"])
-                    print(f"\n🔧 check_environment({block.input['command']})")
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": json.dumps(result),
-                    })
-                elif block.name == "propose_fix":
-                    has_proposal = True
-                    proposal = block.input
-                    _log_event({"event": "diagnosis", "attempt": attempt, "proposal": proposal})
-                    _print_proposal(proposal)
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": "Proposal shown to user. Waiting for their response.",
-                    })
-            messages.append({"role": "user", "content": tool_results})
-            if not has_proposal:
+
+            try:
+                if proposal:
+                    raw = input("\n[a]pply fix / [q]uit / or type to discuss: ").strip()
+                else:
+                    raw = input("\n[q]uit / or type to discuss: ").strip()
+            except EOFError:
+                return None
+
+            if raw.lower() in ("a", "apply") and proposal:
+                return proposal
+            if raw.lower() in ("q", "quit"):
+                return None
+            if not raw:
                 continue
 
-        try:
-            if proposal:
-                raw = input("\n[a]pply fix / [q]uit / or type to discuss: ").strip()
-            else:
-                raw = input("\n[q]uit / or type to discuss: ").strip()
-        except EOFError:
+            messages.append({"role": "user", "content": raw})
+            proposal = None
+        else:
+            print(f"\n⚠️  Diagnostic conversation hit {_MAX_DIAGNOSTIC_TURNS} turns without resolution.")
             return None
-
-        if raw.lower() in ("a", "apply") and proposal:
-            return proposal
-        if raw.lower() in ("q", "quit"):
-            return None
-        if not raw:
-            continue
-
-        messages.append({"role": "user", "content": raw})
-        proposal = None
-    else:
-        print(f"\n⚠️  Diagnostic conversation hit {_MAX_DIAGNOSTIC_TURNS} turns without resolution.")
-        return None
+    finally:
+        log_usage("troubleshoot", config.MODEL_SONNET, usage)
 
 
 def apply_parameter_fix(params: SubmissionParams, changes: dict) -> None:

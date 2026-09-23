@@ -25,6 +25,7 @@ class Session:
         self.fastq_dir: Path | None = None
         self.stages_completed: list[str] = []
         self.source_prompt: str | None = None  # where the prompt was read from, for relative paths
+        self.mode: str = "pipeline"  # "pipeline" (FASTQ -> nextflow -> analysis) or "analysis" (counts only)
 
         # Analysis state — populated by Stage 3 tools
         self.counts_df: pd.DataFrame | None = None
@@ -32,11 +33,12 @@ class Session:
         self.tpm_df: pd.DataFrame | None = None
         self.design_df: pd.DataFrame | None = None
         self.deseq_results: pd.DataFrame | None = None
+        self.deseq_design: str | None = None
         self.enrichment_results: dict[str, Any] | None = None
         self.results_dir: Path | None = None
         self.multiqc_stats: pd.DataFrame | None = None
 
-    def begin_run(self, project_name: str, source_prompt: Path | None = None) -> None:
+    def begin_run(self, project_name: str, source_prompt: Path | None = None, mode: str = "pipeline") -> None:
         """Create a new timestamped run directory and initialise paths."""
         datestamp = datetime.now().strftime("%Y%m%d")
         base = f"{datestamp}_{project_name}"
@@ -50,6 +52,7 @@ class Session:
         self.paths.dir.mkdir(parents=True, exist_ok=True)
         self.stages_completed = []
         self.source_prompt = str(source_prompt.resolve()) if source_prompt else None
+        self.mode = mode
         self._save_state()
 
     def resume_run(self, run_dir: Path) -> None:
@@ -66,6 +69,7 @@ class Session:
         state = json.loads(state_file.read_text()) if state_file.is_file() else {}
         self.stages_completed = state.get("stages_completed", [])
         self.source_prompt = state.get("source_prompt")
+        self.mode = state.get("mode", "pipeline")
 
     def mark_stage_complete(self, stage: str) -> None:
         """Record a stage as done (approved/validated). Persisted so --resume can trust it."""
@@ -77,7 +81,7 @@ class Session:
         return stage in self.stages_completed
 
     def _save_state(self) -> None:
-        state = {"stages_completed": self.stages_completed, "source_prompt": self.source_prompt}
+        state = {"stages_completed": self.stages_completed, "source_prompt": self.source_prompt, "mode": self.mode}
         self.require_paths().state_file.write_text(json.dumps(state, indent=2) + "\n")
 
     def require_paths(self) -> RunPaths:

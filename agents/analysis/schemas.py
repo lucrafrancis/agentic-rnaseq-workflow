@@ -146,6 +146,8 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "name": "run_deseq2",
         "description": "Run differential expression with PyDESeq2 for a given contrast. "
         "The contrast is [factor, test, reference], e.g. ['condition', 'treated', 'control']. "
+        "Optional covariates (other design columns such as batch, donor, tissue) are adjusted "
+        "for: design = ~ covariates + factor. Refuses confounded designs. "
         "Requires load_counts and a design (set_design or loaded via load_counts).",
         "input_schema": {
             "type": "object",
@@ -156,6 +158,11 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "minItems": 3,
                     "maxItems": 3,
                     "description": "DE contrast as [factor, test_level, reference_level].",
+                },
+                "covariates": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Design columns to adjust for (categorical), e.g. ['donor'] or ['batch'].",
                 },
             },
             "required": ["contrast"],

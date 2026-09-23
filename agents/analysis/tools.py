@@ -369,6 +369,7 @@ def load_counts(counts_path: str, design_path: str | None = None) -> Summary:
         "tpm_loaded": SESSION.tpm_df is not None,
         "design_loaded": SESSION.design_df is not None,
         "conditions": conditions,
+        "design_columns": list(SESSION.design_df.columns) if SESSION.design_df is not None else None,
         "detected_format": detected_format,
     }
 
@@ -563,10 +564,12 @@ def filter_low_counts(min_count: int = 10, min_samples: int = 2) -> Summary:
     }
 
 
-def run_deseq2(contrast: list[str]) -> Summary:
-    """Run PyDESeq2 for a given contrast.
+def run_deseq2(contrast: list[str], covariates: list[str] | None = None) -> Summary:
+    """Run PyDESeq2 for a given contrast, optionally adjusting for covariates.
 
     contrast is [factor, test, reference], e.g. ["condition", "treated", "control"].
+    covariates are other design columns (batch, donor, tissue) added before the factor:
+    design = ~ cov1 + cov2 + factor. Covariates are treated as categorical.
     PyDESeq2 expects raw integer counts as samples (rows) x genes (cols).
     """
     if SESSION.counts_df is None:
@@ -577,8 +580,41 @@ def run_deseq2(contrast: list[str]) -> Summary:
         return {"error": "bad_contrast", "message": "Contrast must be [factor, test, reference]."}
 
     factor, test, ref = contrast
-    if factor not in SESSION.design_df.columns:
-        return {"error": "bad_factor", "message": f"'{factor}' is not a column in the design."}
+    covariates = list(covariates or [])
+    for col in [factor, *covariates]:
+        if col not in SESSION.design_df.columns:
+            return {"error": "bad_factor", "message": f"'{col}' is not a column in the design. "
+                    f"Columns: {list(SESSION.design_df.columns)}"}
+    if factor in covariates:
+        return {"error": "bad_covariates", "message": f"'{factor}' is the contrast factor; don't list it as a covariate."}
+    bad_names = [c for c in [factor, *covariates] if not str(c).isidentifier()]
+    if bad_names:
+        return {"error": "bad_column_name", "message": f"Design column names must be identifiers for the formula: {bad_names}"}
+
+    missing_samples = [s for s in SESSION.counts_df.columns if s not in SESSION.design_df.index]
+    if missing_samples:
+        return {"error": "samples_missing_from_design", "message": f"Samples in counts but not design: {missing_samples[:10]}"}
+    design = SESSION.design_df.loc[SESSION.counts_df.columns, [factor, *covariates]].astype(str)
+
+    levels = sorted(design[factor].unique())
+    for level in (test, ref):
+        if level not in levels:
+            return {"error": "bad_level", "message": f"'{level}' is not a level of '{factor}'. Levels: {levels}"}
+    single = [c for c in covariates if design[c].nunique() < 2]
+    if single:
+        return {"error": "constant_covariate", "message": f"Covariates with a single value add nothing: {single}"}
+
+    # Full-rank check: confounded covariates (e.g. batch == condition) make the model unfittable
+    X = pd.get_dummies(design[[*covariates, factor]], drop_first=True).astype(float)
+    X.insert(0, "intercept", 1.0)
+    rank = int(np.linalg.matrix_rank(X.to_numpy()))
+    if rank < X.shape[1]:
+        return {"error": "confounded_design", "message": (
+            f"Covariates {covariates} are confounded with '{factor}' (design matrix rank {rank} < "
+            f"{X.shape[1]} columns). Drop the confounded covariate — its effect can't be separated.")}
+    if len(design) - rank < 1:
+        return {"error": "no_residual_df", "message": "Too many parameters for the number of samples."}
+    formula = "~" + " + ".join([*covariates, factor])
 
     from pydeseq2.dds import DeseqDataSet
     from pydeseq2.ds import DeseqStats
@@ -595,10 +631,7 @@ def run_deseq2(contrast: list[str]) -> Summary:
         counts_t = counts_t.round().astype(int)
         counts_rounded = True
 
-    # Align design to count matrix samples
-    design = SESSION.design_df.loc[counts_t.index]
-
-    dds = DeseqDataSet(counts=counts_t, metadata=design, design=f"~{factor}")
+    dds = DeseqDataSet(counts=counts_t, metadata=design, design=formula)
     dds.deseq2()
 
     stat_res = DeseqStats(dds, contrast=[factor, test, ref])
@@ -606,6 +639,7 @@ def run_deseq2(contrast: list[str]) -> Summary:
     results = stat_res.results_df.copy()
 
     SESSION.deseq_results = results
+    SESSION.deseq_design = formula
 
     # Write to disk
     paths = SESSION.require_paths()
@@ -632,6 +666,7 @@ def run_deseq2(contrast: list[str]) -> Summary:
 
     result: Summary = {
         "contrast": contrast,
+        "design": formula,
         "n_tested": int(results["padj"].notna().sum()),
         "n_significant": int(len(sig)),
         "n_up": n_up,
@@ -785,6 +820,7 @@ def summarize_findings() -> Summary:
             "n_significant": int(len(sig)),
             "n_up": int((sig["log2FoldChange"] > 0).sum()),
             "n_down": int((sig["log2FoldChange"] < 0).sum()),
+            "design_formula": SESSION.deseq_design,
         }
 
     if SESSION.enrichment_results:

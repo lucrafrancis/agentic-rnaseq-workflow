@@ -275,6 +275,41 @@ class TestRunDeseq2:
         result = run_deseq2(["condition", "KO", "WT"])
         json.dumps(result)
 
+    def _design_with(self, tmp_path: Path, extra: dict[str, list[str]]) -> Path:
+        path = tmp_path / "design_cov.csv"
+        rows = {"sample": ["WT_REP1", "WT_REP2", "KO_REP1", "KO_REP2"], "condition": ["WT", "WT", "KO", "KO"], **extra}
+        import pandas as pd
+        pd.DataFrame(rows).to_csv(path, index=False)
+        return path
+
+    def test_paired_covariate(self, tmp_path: Path, count_matrix_tsv: Path):
+        SESSION.begin_run("test")
+        design = self._design_with(tmp_path, {"donor": ["A", "B", "A", "B"]})
+        load_counts(str(count_matrix_tsv), design_path=str(design))
+        filter_low_counts(min_count=1, min_samples=1)
+        result = run_deseq2(["condition", "KO", "WT"], covariates=["donor"])
+        assert "error" not in result
+        assert result["design"] == "~donor + condition"
+        assert summarize_findings()["de_summary"]["design_formula"] == "~donor + condition"
+
+    @pytest.mark.parametrize("extra,contrast,covariates,error", [
+        ({"batch": ["1", "1", "2", "2"]}, ["condition", "KO", "WT"], ["batch"], "confounded_design"),
+        ({"batch": ["1", "1", "1", "1"]}, ["condition", "KO", "WT"], ["batch"], "constant_covariate"),
+        ({}, ["condition", "KO", "WT"], ["donor"], "bad_factor"),
+        ({}, ["condition", "KO", "Control"], None, "bad_level"),
+        ({}, ["condition", "KO", "WT"], ["condition"], "bad_covariates"),
+        ({"cell line": ["a", "b", "a", "b"]}, ["condition", "KO", "WT"], ["cell line"], "bad_column_name"),
+    ])
+    def test_design_validation(self, tmp_path, count_matrix_tsv, extra, contrast, covariates, error):
+        design = self._design_with(tmp_path, extra)
+        load_counts(str(count_matrix_tsv), design_path=str(design))
+        assert run_deseq2(contrast, covariates=covariates)["error"] == error
+
+    def test_load_counts_reports_design_columns(self, tmp_path, count_matrix_tsv):
+        design = self._design_with(tmp_path, {"donor": ["A", "B", "A", "B"]})
+        result = load_counts(str(count_matrix_tsv), design_path=str(design))
+        assert result["design_columns"] == ["condition", "donor"]
+
 
 class TestGetTopGenes:
     def test_requires_deseq_results(self):

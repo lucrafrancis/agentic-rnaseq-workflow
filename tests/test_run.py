@@ -157,12 +157,13 @@ class TestAnalyzeMode:
         prompt = tmp_path / "myproject" / "prompt.txt"
         prompt.parent.mkdir()
         prompt.write_text("GSE123456. Count matrix at ./counts.csv\n")
-        monkeypatch.setattr(sys, "argv", ["run.py", "--analyze", str(prompt)])
+        monkeypatch.setattr(sys, "argv", ["run.py", "--analyze", str(prompt), "--skip-download"])
 
         run.main()
 
         assert stubbed["analysis"] == [None]
         assert stubbed["download_agent"] == []
+        assert SESSION.mode == "analysis"
         paths = SESSION.require_paths()
         assert paths.dir.name.endswith("_myproject")
         assert (paths.dir / "prompt.txt").read_text() == prompt.read_text()
@@ -178,3 +179,74 @@ class TestAnalyzeMode:
         run.main()
 
         assert stubbed["analysis"] == [None]
+
+
+class TestCountsStage:
+    def _fake_counts_agent(self, calls):
+        def agent(prompt):
+            calls.append(prompt)
+            paths = SESSION.require_paths()
+            paths.counts_matrix.write_text("gene_id\tA\tB\nG1\t1\t2\n")
+            paths.counts_metadata.write_text(json.dumps({
+                "filename": "GSE1_counts.txt.gz", "source": "author", "value_type": "raw_integer_counts",
+                "n_genes": 1, "gene_id_type": "symbol", "n_duplicates_summed": 0,
+                "samples": [
+                    {"sample": "A", "gsm": "GSM1", "title": "A", "file_column": "colA"},
+                    {"sample": "B", "gsm": "GSM2", "title": "B", "file_column": "colB"},
+                ],
+                "dropped_columns": ["Length"], "unmapped_gsms": [],
+            }))
+            paths.design.write_text("sample,condition,gsm,title,tissue\nA,ctrl,GSM1,A,x\nB,trt,GSM2,B,y\n")
+        return agent
+
+    def test_analyze_prompt_with_accession_fetches_counts(self, stubbed, monkeypatch, tmp_path):
+        agent_calls: list = []
+        monkeypatch.setattr("agents.download.loop.run_counts_agent", self._fake_counts_agent(agent_calls))
+        previews = []
+        monkeypatch.setattr(run, "present_for_approval",
+                            lambda title, preview, **kw: previews.append(preview) or ApprovalResult(approved=True))
+        prompt = tmp_path / "proj" / "prompt.txt"
+        prompt.parent.mkdir()
+        prompt.write_text("Use the count matrix from GSE1.\n")
+        monkeypatch.setattr(sys, "argv", ["run.py", "--analyze", str(prompt)])
+
+        run.main()
+
+        assert len(agent_calls) == 1
+        assert SESSION.is_complete("download")
+        assert stubbed["analysis"] == [None]
+        assert "colA" in previews[0] and "GSM1" in previews[0] and "ctrl" in previews[0] and "tissue" in previews[0]
+
+    def test_rejected_counts_exit_before_analysis(self, stubbed, monkeypatch):
+        monkeypatch.setattr("agents.download.loop.run_counts_agent", self._fake_counts_agent([]))
+        monkeypatch.setattr(run, "present_for_approval", lambda title, **kw: ApprovalResult(approved=False))
+        SESSION.begin_run("counts", mode="analysis")
+        with pytest.raises(SystemExit):
+            run._run_analysis_only("GSE1")
+        assert not SESSION.is_complete("download")
+        assert stubbed["analysis"] == []
+
+    def test_unapproved_counts_reapproved_without_agent(self, stubbed, monkeypatch):
+        agent_calls: list = []
+        SESSION.begin_run("counts", mode="analysis")
+        self._fake_counts_agent([])("")  # artifacts from an interrupted run
+        monkeypatch.setattr("agents.download.loop.run_counts_agent", self._fake_counts_agent(agent_calls))
+
+        run._run_analysis_only("GSE1")
+
+        assert agent_calls == []
+        assert stubbed["approvals"] == ["GEO count matrix and design"]
+
+    def test_resume_analysis_run_never_enters_pipeline(self, stubbed, monkeypatch):
+        SESSION.begin_run("counts", mode="analysis")
+        SESSION.mark_stage_complete("download")
+        run_dir = SESSION.require_paths().dir
+        (run_dir / "prompt.txt").write_text("GSE1\n")
+        SESSION.__init__()
+        monkeypatch.setattr(run, "_run_pipeline", lambda *a, **k: pytest.fail("pipeline must not run"))
+        monkeypatch.setattr(sys, "argv", ["run.py", "--resume", str(run_dir)])
+
+        run.main()
+
+        assert stubbed["analysis"] == [None]
+        assert stubbed["samplesheet_agent"] == []

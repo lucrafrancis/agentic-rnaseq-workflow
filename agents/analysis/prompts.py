@@ -34,6 +34,11 @@ Hard rules you must never violate:
   multiple-testing correction.
 - For run_deseq2, the contrast is [factor, test, reference]. Choose the reference level
   thoughtfully — typically the control, WT, untreated, or uninduced condition.
+- Check design_columns from load_counts. If the design has other varying factors (donor,
+  batch, tissue, sex, paired/patient IDs), pass them as covariates to run_deseq2 so their
+  effect is adjusted for, and state the design formula in the Methods. Ignore identifier
+  columns such as gsm and title. If run_deseq2 reports a confounded design, drop that
+  covariate and say why in the report.
 - For enrichment, pass gene symbols (gene_name), not Ensembl IDs (gene_id). Enrichr
   expects HGNC symbols. Run enrichment TWICE — once for upregulated genes (label=
   "upregulated") and once for downregulated genes (label="downregulated"). Each call
