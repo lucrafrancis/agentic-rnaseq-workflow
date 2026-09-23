@@ -93,7 +93,7 @@ Agent loops and the troubleshooter use automatic prompt caching (top-level `cach
 
 - Finish and review the GSE246386 full run (check samplesheet against README §3 before approving).
 - Download approval screen prints the whole ~400-line script and only shows the run → GSM → title table when a subset is selected; it should always show the labelled table, sizes and tool, and just give the script path.
-- Build the benchmark: ~8–10 human/mouse GEO datasets with expected mapping/design/samplesheet; score agents (and Haiku vs Sonnet) with `usage.jsonl` for cost.
+- Build the benchmark — see **Benchmark plan** below.
 
 **Known gaps (not blocking)**
 
@@ -103,6 +103,29 @@ Agent loops and the troubleshooter use automatic prompt caching (top-level `cach
 - Samplesheet agent relays `match_pairs` output into `draft_samplesheet` (gated by approval, but still an LLM relay); analysis `set_design` has no approval step.
 - Enrichr and NCBI rate limits (429s, captcha pages) are handled but can still slow or interrupt runs; ENA download speed varies a lot (aria2c `-x 16` may help).
 - Nextflow `work/` directories are never cleaned up automatically.
+
+## Benchmark plan (not built yet)
+
+**Purpose:** show that the workflow is reliable on varied real GEO data (the evidence academic labs and small biotechs need before trusting it), find what to fix next, compare models on accuracy and cost, and serve as a regression suite after changes.
+
+**Datasets:** ~8–10 human/mouse GEO series, chosen to cover the known hard cases, each tagged with what it tests:
+
+- FASTQ path: paired vs single-end, multi-lane samples, stranded libraries, a recent series resolvable only via BioProject, runs with blank ENA labels, a subset request ("2 per condition"), a SuperSeries.
+- Counts mode: clean author matrix, featureCounts with annotation columns, R-style headers, NCBI-generated only, normalised-only (must stop and explain), per-sample `_RAW.tar` (must stop cleanly until supported).
+- Design: >2 groups needing a specific contrast, a hidden covariate (tissue/batch), a donor-paired design, a confounded design (must drop the covariate and say why), mouse.
+- Must-stop cases: ambiguous conditions (agent should ask), unlabelled runs (hard stop).
+
+GSE157852, GSE164073 and GSE246386 from `examples/smoke/` are the first entries.
+
+**Expected answers** per dataset (`expected.json`): mode, runs or SubSeries chosen, count file, column → GSM mapping, condition field/labels, covariates, contrast (test/reference), samplesheet rows (sample → FASTQ pair, strandedness), and whether the correct outcome is to stop. Keep expected answers where agents cannot read them — restrict the samplesheet agent's `read_file`/`list_directory` to the run and data directories before building this.
+
+**How it runs (never auto-approves):** each stage is scored on the artifact it proposes at its approval point, then the harness stops — stopping is not approving. Later stages are scored separately from gold inputs (expected `samplesheet.csv`, `counts.tsv` + `design.csv`), so an error in one stage doesn't cascade and each agent is measured in isolation. Stages 0–1 and counts mode need no AWS; run nextflow on only a few datasets.
+
+**Scoring** comes from artifacts and tool logs, never from report prose: `download_metadata.json`, `counts_metadata.json`, `design.csv`, `samplesheet.csv`, and `run_deseq2`/`run_enrichment` arguments in `analysis/tool_calls.jsonl`. Pass/fail per check, plus report health (`write_report` rejections, ⚠ markers, untraced numbers once that audit exists) and cost/turns from `usage.jsonl`. Spot-check report quality by hand.
+
+**Output:** a results table (dataset × check × model, plus cost) committed under `benchmark/`; raw runs stay gitignored.
+
+**Before building:** restrict file-reading tool paths (above) and consider the untraced-numbers audit, so report accuracy can be scored too.
 
 ## Future direction
 
