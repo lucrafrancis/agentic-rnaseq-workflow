@@ -177,7 +177,7 @@ def _run_pipeline(prompt: str, *, skip_download: bool = False) -> None:
             print(f"Stage 1: found unapproved samplesheet ({samplesheet}), presenting for approval.")
         else:
             from agents.samplesheet.loop import run_samplesheet_agent
-            run_samplesheet_agent(prompt)
+            run_samplesheet_agent(prompt + _sample_metadata_note())
 
             if not samplesheet.is_file():
                 sys.exit("Samplesheet agent did not produce a sample sheet. Check the logs.")
@@ -238,6 +238,31 @@ def _run_pipeline(prompt: str, *, skip_download: bool = False) -> None:
     _run_analysis(outcome["outdir"], original_prompt=prompt)
 
 
+def _sample_metadata_note() -> str:
+    """Write the downloaded runs' sample labels to sample_metadata.csv and return a prompt
+    note pointing the samplesheet agent at it. Labels come from download_metadata.json
+    (GEO/ENA), never from the LLM. Empty string if nothing was downloaded."""
+    from agents.download.tools import selected_runs
+
+    paths = SESSION.require_paths()
+    if not paths.download_metadata.is_file():
+        return ""
+    metadata = json.loads(paths.download_metadata.read_text())
+    with paths.sample_metadata.open("w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["run_accession", "sample", "title", "library_layout"])
+        for r in selected_runs(metadata):
+            writer.writerow([r["run_accession"], r.get("sample_alias", ""), r.get("sample_title", ""),
+                             r.get("library_layout", "")])
+    note = (
+        f"\n\nSample metadata for the downloaded runs (run accession -> GEO sample -> title), "
+        f"from GEO/ENA: {paths.sample_metadata}"
+    )
+    if metadata.get("output_dir"):
+        note += f"\nThe FASTQs were downloaded to: {metadata['output_dir']}"
+    return note
+
+
 def _extract_accession(prompt: str) -> str | None:
     """Extract a GEO/SRA accession from the prompt text."""
     m = re.search(r"\b(GSE\d+|SRP\d+|ERP\d+|DRP\d+|PRJNA\d+)\b", prompt, re.IGNORECASE)
@@ -252,7 +277,13 @@ def _download_stage(prompt: str) -> None:
     with a valid MD5 are skipped, so an interrupted download picks up where it left off.
     """
     from agents.download.loop import run_download_agent
-    from agents.download.tools import execute_download, generate_download_script, selected_runs, validate_downloads
+    from agents.download.tools import (
+        execute_download,
+        generate_download_script,
+        selected_runs,
+        unlabelled_runs,
+        validate_downloads,
+    )
 
     print("\n--- Stage 0: Data Download ---")
     paths = SESSION.require_paths()
@@ -269,6 +300,15 @@ def _download_stage(prompt: str) -> None:
 
     if not paths.download_metadata.is_file():
         sys.exit("Download agent failed to resolve the accession. Check the logs above.")
+
+    # Hard stop: never proceed with runs that can't be tied to a sample.
+    unlabelled = unlabelled_runs(selected_runs(json.loads(paths.download_metadata.read_text())))
+    if unlabelled:
+        sys.exit(
+            f"Runs with no sample ID/title: {', '.join(unlabelled[:20])}. They can't be assigned "
+            "to conditions, so the workflow stops here. Use the GEO series accession if one "
+            "exists, or provide FASTQs with a metadata file and run with --skip-download."
+        )
 
     if not paths.download_script.is_file():
         print("No downloads needed — files already present.")

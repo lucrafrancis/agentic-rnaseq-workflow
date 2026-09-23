@@ -24,7 +24,8 @@ _MAX_RETRIES = 3
 _BACKOFF_BASE = 2.0
 
 _ENA_FIELDS = (
-    "run_accession,fastq_ftp,fastq_aspera,fastq_md5,fastq_bytes,library_layout,sample_alias,sample_title"
+    "run_accession,experiment_accession,fastq_ftp,fastq_aspera,fastq_md5,fastq_bytes,"
+    "library_layout,sample_alias,sample_title"
 )
 _ENA_API = "https://www.ebi.ac.uk/ena/portal/api/filereport"
 _NCBI_ESEARCH = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
@@ -133,6 +134,7 @@ def _parse_ena_run(row: dict) -> dict:
 
     return {
         "run_accession": row.get("run_accession", ""),
+        "experiment_accession": row.get("experiment_accession", ""),
         "library_layout": row.get("library_layout", ""),
         "sample_alias": row.get("sample_alias", ""),
         "sample_title": row.get("sample_title", ""),
@@ -145,9 +147,11 @@ def _parse_ena_run(row: dict) -> dict:
 
 
 def _resolve_gse(gse: str) -> list[dict]:
-    """GSE -> GDS record -> BioProject/SRP -> ENA FASTQ URLs.
+    """GSE -> SRA study/BioProject -> ENA runs, labelled with GEO sample IDs and titles.
 
-    Returns [] when the series has no linked SRA project; raises LookupFailed when
+    The GDS search record links SRA for older series; newer ones only link a BioProject
+    in the series SOFT record, so that is the fallback. Returns [] when the series has
+    no linked raw data; raises SuperSeries for umbrella records and LookupFailed when
     NCBI/ENA can't be queried.
     """
     data = _http_get_json(f"{_NCBI_ESEARCH}?db=gds&term={gse}[ACCN]&retmode=json")
@@ -167,12 +171,56 @@ def _resolve_gse(gse: str) -> list[dict]:
 
     match = re.search(r"acc=(PRJNA\d+|SRP\d+|ERP\d+|DRP\d+)", record)
     if match:
-        return _resolve_study(match.group(1))
+        study = match.group(1)
+    else:
+        soft = _series_soft(gse)
+        if "SuperSeries of:" in soft:
+            raise SuperSeries(gse, _subseries(soft))
+        match = re.search(r"sra\?term=(SRP\d+|ERP\d+|DRP\d+)", soft) or re.search(
+            r"bioproject/(PRJ[A-Z]{2}\d+)", soft
+        )
+        if not match:
+            return []
+        study = match.group(1)
 
-    if "SuperSeries" in record:
-        raise SuperSeries(gse, _subseries(gse))
+    runs = _resolve_study(study)
+    if runs:
+        _label_runs_from_geo(gse, runs)
+    return runs
 
-    return []
+
+def _geo_samples_by_srx(gse: str) -> dict[str, tuple[str, str]]:
+    """{SRX: (GSM, title)} from the series' GEO sample records."""
+    try:
+        text = _http_get(f"{_GEO_ACC}?acc={gse}&targ=gsm&form=text&view=brief")
+    except urllib.error.URLError as exc:
+        raise LookupFailed(f"GEO sample records fetch failed for {gse}: {exc}") from exc
+    if not text.lstrip().startswith("^SAMPLE"):
+        raise LookupFailed(f"GEO returned no sample records for {gse} (likely rate limiting)")
+    out: dict[str, tuple[str, str]] = {}
+    gsm, title = "", ""
+    for line in text.splitlines():
+        if line.startswith("^SAMPLE"):
+            gsm, title = line.split("=", 1)[1].strip(), ""
+        elif line.startswith("!Sample_title"):
+            title = line.split("=", 1)[1].strip()
+        elif line.startswith("!Sample_relation"):
+            m = re.search(r"sra\?term=(SRX\d+)", line)
+            if m:
+                out[m.group(1)] = (gsm, title)
+    return out
+
+
+def _label_runs_from_geo(gse: str, runs: list[dict]) -> None:
+    """Set each run's GSM and title from GEO via its SRX (ENA often leaves them blank).
+
+    GEO is authoritative for GEO series; runs with no GEO match keep ENA's values.
+    """
+    by_srx = _geo_samples_by_srx(gse)
+    for run in runs:
+        match = by_srx.get(run.get("experiment_accession", ""))
+        if match:
+            run["sample_alias"], run["sample_title"] = match
 
 
 def _series_soft(gse: str) -> str:
@@ -186,9 +234,9 @@ def _series_soft(gse: str) -> str:
     return text
 
 
-def _subseries(gse: str) -> list[dict]:
-    """SubSeries of a SuperSeries, with titles (best effort) so the agent can choose."""
-    accs = re.findall(r"!Series_relation = SuperSeries of: (GSE\d+)", _series_soft(gse))
+def _subseries(soft: str) -> list[dict]:
+    """SubSeries listed in a SuperSeries' SOFT record, with titles (best effort)."""
+    accs = re.findall(r"!Series_relation = SuperSeries of: (GSE\d+)", soft)
     out = []
     for i, acc in enumerate(accs):
         entry = {"accession": acc}
@@ -295,6 +343,7 @@ def resolve_accession(accession: str) -> Summary:
 
     total_bytes = sum(r.get("total_bytes", 0) for r in runs)
     total_files = sum(len(r.get("files", [])) for r in runs)
+    unlabelled = unlabelled_runs(runs)
 
     return {
         "accession": accession,
@@ -313,6 +362,7 @@ def resolve_accession(accession: str) -> Summary:
             for r in runs
         ],
         "metadata_saved": str(paths.download_metadata),
+        **({"unlabelled_runs": unlabelled} if unlabelled else {}),
     }
 
 
@@ -327,6 +377,12 @@ def _select_runs(metadata: dict, runs: list[str] | None) -> tuple[list[dict], st
     if unknown:
         return [], f"Not runs of {metadata.get('accession', 'this accession')}: {unknown[:10]}"
     return [by_acc[r] for r in dict.fromkeys(runs)], None
+
+
+def unlabelled_runs(runs: list[dict]) -> list[str]:
+    """Runs that can't be tied to a sample (no sample ID or no title). Downloading or
+    building a samplesheet from these would mean guessing which condition they are."""
+    return [r["run_accession"] for r in runs if not (r.get("sample_alias") and r.get("sample_title"))]
 
 
 def selected_runs(metadata: dict) -> list[dict]:
@@ -417,6 +473,17 @@ def generate_download_script(output_dir: str, runs: list[str] | None = None) -> 
     runs, err = _select_runs(metadata, runs)
     if err:
         return {"error": "bad_runs", "message": err}
+    unlabelled = unlabelled_runs(runs)
+    if unlabelled:
+        return {
+            "error": "unlabelled_runs",
+            "message": (
+                f"Runs with no sample ID/title: {unlabelled[:20]}. They can't be assigned to "
+                "conditions, so nothing will be downloaded. If you resolved an SRA/BioProject "
+                "accession, retry with the GEO series (GSE) if one exists; otherwise stop and "
+                "tell the user these runs need a sample mapping."
+            ),
+        }
     dirpath = Path(output_dir).resolve()
     # Record the selection up front so resume and validation see it even when
     # nothing needs downloading.

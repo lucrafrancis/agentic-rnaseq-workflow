@@ -87,4 +87,49 @@ adjusted for. The prompt intentionally does not mention tissue.
 
 ---
 
-## 3. Full pipeline — dataset to be decided
+## 3. GSE246386 — full pipeline (download → samplesheet → nextflow → analysis)
+
+```bash
+uv run python run.py examples/smoke/GSE246386_full/prompt.txt
+```
+
+Run directory: `runs/<date>_GSE246386_full/`. Needs Nextflow + Docker; runs salmon-only
+locally. FASTQs go to `./data/GSE246386/fastqs/` (gitignored).
+
+**Before running:** free disk space. Expect ~6 GB of FASTQs plus reference download,
+Docker images and a `work/` directory that can grow to several times the input size
+(earlier runs left 95 GB). Delete `work/` once you've checked the results.
+
+**Tests:** resolving a recent series via its BioProject (no SRA link in GEO's search
+record); runs whose sample labels ENA leaves blank (3 of 6 here, filled from GEO);
+paired-end handling end to end; the full stage chain and `run_state.json`.
+
+**At the download approval, expect:** 6 runs, 12 files, ~5.9 GB, every run labelled:
+
+| run | GSM | title |
+|---|---|---|
+| SRR26539599 | GSM7868165 | CD34+ iPSC-HE, day4, EV#1 |
+| SRR26539598 | GSM7868166 | CD34+ iPSC-HE, day4, EV#2 |
+| SRR26539597 | GSM7868167 | CD34+ iPSC-HE, day4, EV#3 |
+| SRR26539596 | GSM7868168 | CD34+ iPSC-HE, day4, GFI1B#1 |
+| SRR26539595 | GSM7868169 | CD34+ iPSC-HE, day4, GFI1B#2 |
+| SRR26539594 | GSM7868170 | CD34+ iPSC-HE, day4, GFI1B#3 |
+
+**Worth testing resume here:** interrupt (Ctrl-C) during the download, then
+`uv run python run.py --resume runs/<date>_GSE246386_full` — it should regenerate the
+script without the LLM and skip files that already pass MD5.
+
+**At the samplesheet approval, expect:** 6 rows, `fastq_1`/`fastq_2` paired correctly
+(`_1`/`_2`), strandedness `auto`, sample names reflecting EV/GFI1B and replicate.
+`design.csv`: EV × 3, GFI1B × 3.
+
+**At the nextflow approval, expect:** `genome: GRCh38`, `skip_alignment: true`,
+`pseudo_aligner: salmon`, resource limits matching this machine in `custom.config`.
+
+**Afterwards, check:**
+
+- Contrast GFI1B vs EV (EV as reference), design `~condition`, 3 vs 3.
+- Pipeline warnings summary makes sense; `usage.jsonl` shows tokens per agent.
+- Optional cross-check: the authors' raw counts (`GSE246386_raw_count.txt.gz`, Ensembl
+  IDs) should correlate strongly with the Salmon gene counts — a quick sanity check
+  that the preprocessing is sound.

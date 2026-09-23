@@ -106,6 +106,11 @@ class RunPaths:
         return self.dir / "counts_metadata.json"
 
     @property
+    def sample_metadata(self) -> Path:
+        """Run -> GSM -> title for downloaded runs, handed to the samplesheet agent."""
+        return self.dir / "sample_metadata.csv"
+
+    @property
     def design(self) -> Path:
         return self.dir / "design.csv"
 

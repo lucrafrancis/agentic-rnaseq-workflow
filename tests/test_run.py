@@ -94,6 +94,31 @@ class TestSamplesheetStage:
         assert not SESSION.is_complete("samplesheet")
 
 
+    def test_samplesheet_agent_gets_download_labels(self, stubbed):
+        _start(["download"])
+        paths = SESSION.require_paths()
+        paths.download_metadata.write_text(json.dumps({
+            "output_dir": "/data/fq", "selected_runs": ["SRR2"],
+            "runs": [
+                {"run_accession": "SRR1", "sample_alias": "GSM1", "sample_title": "EV#1", "library_layout": "PAIRED"},
+                {"run_accession": "SRR2", "sample_alias": "GSM2", "sample_title": "GFI1B#1", "library_layout": "PAIRED"},
+            ],
+        }))
+
+        run._run_pipeline("GSE246386")
+
+        prompt = stubbed["samplesheet_agent"][0]
+        assert str(paths.sample_metadata) in prompt and "/data/fq" in prompt
+        assert paths.sample_metadata.read_text().splitlines() == [
+            "run_accession,sample,title,library_layout", "SRR2,GSM2,GFI1B#1,PAIRED",
+        ]
+
+    def test_no_download_no_metadata_note(self, stubbed):
+        _start()
+        run._run_pipeline("FASTQs in ./fastqs")
+        assert stubbed["samplesheet_agent"] == ["FASTQs in ./fastqs"]
+
+
 class TestDownloadStage:
     def test_skip_download_flag(self, stubbed):
         _start()
@@ -158,7 +183,7 @@ class TestDownloadStage:
         _start()
         paths = SESSION.require_paths()
         runs = [{"run_accession": f"SRR{i}", "sample_alias": f"GSM{i}", "sample_title": f"t{i}", "files": []}
-                for i in (1, 2)]
+                for i in (1, 2)]  # labelled, so the hard stop doesn't trigger
         paths.download_metadata.write_text(json.dumps(
             {"runs": runs, "output_dir": str(tmp_path), "selected_runs": ["SRR2"], "n_downloads": 1}
         ))
@@ -181,6 +206,24 @@ class TestDownloadStage:
         assert "GSM2" in shown[0]["selection"]
         assert [r["run_accession"] for r in validated[0]] == ["SRR2"]
         assert SESSION.is_complete("download")
+
+
+    def test_unlabelled_runs_stop_the_workflow(self, stubbed, monkeypatch, tmp_path):
+        """Even if the agent finds every file present and writes no script."""
+        _start()
+        paths = SESSION.require_paths()
+
+        def agent(prompt):
+            paths.download_metadata.write_text(json.dumps({"runs": [
+                {"run_accession": "SRR1", "sample_alias": "GSM1", "sample_title": "Mock", "files": []},
+                {"run_accession": "SRR2", "sample_alias": "", "sample_title": "", "files": []},
+            ]}))
+
+        monkeypatch.setattr("agents.download.loop.run_download_agent", agent)
+        with pytest.raises(SystemExit, match="SRR2"):
+            run._run_pipeline("GSE123456")
+        assert not SESSION.is_complete("download")
+        assert stubbed["samplesheet_agent"] == []
 
 
 class TestAnalyzeMode:

@@ -16,6 +16,9 @@ Guidelines:
   pass them as runs= to check_existing_files and generate_download_script. List which
   runs you chose (run -> GSM -> title) so the user can verify at approval. Only what
   you select is downloaded.
+- Every run must be tied to a sample: if resolve_accession reports unlabelled_runs, do not
+  guess what they are. If the sample titles don't make the conditions clear, or a
+  requested subset is ambiguous, stop and ask rather than choose.
 - If resolve_accession returns superseries, the accession is an umbrella record. Pick the
   SubSeries that matches the prompt (assay, organism, comparison) and resolve that; if
   it's ambiguous, list the SubSeries with their titles and stop.

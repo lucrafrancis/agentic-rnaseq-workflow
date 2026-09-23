@@ -28,6 +28,10 @@ def run_dir(tmp_path: Path) -> Path:
 
 
 def _write_metadata(runs: list[dict], accession: str = "GSE000") -> None:
+    """Write download metadata; runs get default sample labels unless they set their own."""
+    for i, run in enumerate(runs):
+        run.setdefault("sample_alias", f"GSM{i}")
+        run.setdefault("sample_title", f"sample {i}")
     paths = SESSION.require_paths()
     paths.download_metadata.write_text(
         json.dumps({"accession": accession, "runs": runs}, indent=2)
@@ -149,9 +153,9 @@ class TestResolveGse:
                 }
             ],
         ]
-        mock_get.return_value = (
-            "1. Some study\nSRA Run Selector: "
-            "https://www.ncbi.nlm.nih.gov/Traces/study/?acc=SRP001\n"
+        mock_get.side_effect = lambda url: (
+            "1. Some study\nSRA Run Selector: https://www.ncbi.nlm.nih.gov/Traces/study/?acc=SRP001\n"
+            if "db=gds" in url else "^SAMPLE = GSM1\n!Sample_title = s1\n"
         )
 
         runs = _resolve_gse("GSE123456")
@@ -373,7 +377,10 @@ class TestLookupFailures:
     @patch("agents.download.tools._http_get")
     def test_no_sra_link_is_no_runs(self, mock_get, mock_get_json, run_dir: Path):
         mock_get_json.return_value = {"esearchresult": {"idlist": ["1"]}}
-        mock_get.return_value = "1. A microarray study\nPlatform GPL570\n"
+        mock_get.side_effect = lambda url: (
+            "1. A microarray study\nPlatform GPL570\n" if "db=gds" in url
+            else "^SERIES = GSE123\n!Series_title = Arrays\n"
+        )
         result = resolve_accession("GSE123")
         assert result["error"] == "no_runs_found"
         assert "reachable" in result["message"]
@@ -525,3 +532,88 @@ class TestSuperSeries:
             result = resolve_accession("GSE110004")
         assert result["subseries"][0] == {"accession": "GSE110000"}
         assert result["subseries"][1]["title"] == "RNA-seq of Rap1 depletion"
+
+
+# --- BioProject fallback and GEO labelling ---
+
+
+class TestGeoFallbackAndLabelling:
+    GDS_NO_SRA = "1. Recent study\nOrganism:\tHomo sapiens\nSeries\t\tAccession: GSE246386\n"
+    SERIES_SOFT = (
+        "^SERIES = GSE246386\n!Series_title = GFI1B\n"
+        "!Series_relation = BioProject: https://www.ncbi.nlm.nih.gov/bioproject/PRJNA1032643\n"
+    )
+    SAMPLES_SOFT = (
+        "^SAMPLE = GSM7868165\n!Sample_title = EV#1\n"
+        "!Sample_relation = BioSample: https://www.ncbi.nlm.nih.gov/biosample/SAMN1\n"
+        "!Sample_relation = SRA: https://www.ncbi.nlm.nih.gov/sra?term=SRX22242368\n"
+        "^SAMPLE = GSM7868167\n!Sample_title = EV#3\n"
+        "!Sample_relation = SRA: https://www.ncbi.nlm.nih.gov/sra?term=SRX22242370\n"
+    )
+    ENA = [
+        {"run_accession": "SRR26539599", "experiment_accession": "SRX22242368",
+         "sample_alias": "GSM7868165", "sample_title": "EV#1", "library_layout": "PAIRED"},
+        {"run_accession": "SRR26539597", "experiment_accession": "SRX22242370",
+         "sample_alias": "", "sample_title": "", "library_layout": "PAIRED"},
+        {"run_accession": "SRR0", "experiment_accession": "SRX0",
+         "sample_alias": "", "sample_title": "", "library_layout": "PAIRED"},
+    ]
+
+    def _get(self, url):
+        if "db=gds" in url:
+            return self.GDS_NO_SRA
+        if "targ=self" in url:
+            return self.SERIES_SOFT
+        if "targ=gsm" in url:
+            return self.SAMPLES_SOFT
+        raise AssertionError(url)
+
+    def _json(self, url):
+        if "esearch" in url:
+            return {"esearchresult": {"idlist": ["200246386"]}}
+        assert "PRJNA1032643" in url
+        return self.ENA
+
+    def test_bioproject_fallback_and_labels(self):
+        with patch("agents.download.tools._http_get", side_effect=self._get), \
+             patch("agents.download.tools._http_get_json", side_effect=self._json):
+            runs = {r["run_accession"]: r for r in _resolve_gse("GSE246386")}
+        assert len(runs) == 3
+        assert (runs["SRR26539597"]["sample_alias"], runs["SRR26539597"]["sample_title"]) == ("GSM7868167", "EV#3")
+        assert runs["SRR0"]["sample_alias"] == ""  # no GEO match: left as ENA had it
+
+    def test_labelling_blocked_is_lookup_failure(self, run_dir: Path):
+        def get(url):
+            return "<html>captcha" if "targ=gsm" in url else self._get(url)
+
+        with patch("agents.download.tools._http_get", side_effect=get), \
+             patch("agents.download.tools._http_get_json", side_effect=self._json):
+            assert resolve_accession("GSE246386")["error"] == "lookup_failed"
+
+
+class TestUnlabelledRuns:
+    def test_script_refused_for_unlabelled_selection(self, run_dir: Path, tmp_path: Path):
+        _write_metadata([
+            {"run_accession": "SRR1", "files": [{"filename": "a.fq.gz", "url": "ftp://t", "md5": "x", "bytes": 1}]},
+            {"run_accession": "SRR2", "sample_alias": "", "sample_title": "",
+             "files": [{"filename": "b.fq.gz", "url": "ftp://t", "md5": "y", "bytes": 1}]},
+        ])
+        result = generate_download_script(str(tmp_path / "out"))
+        assert result["error"] == "unlabelled_runs"
+        assert "SRR2" in result["message"]
+        assert not SESSION.require_paths().download_script.exists()
+        # Selecting only labelled runs is fine
+        assert generate_download_script(str(tmp_path / "out"), runs=["SRR1"])["n_files"] == 1
+
+    def test_title_alone_is_not_enough(self):
+        from agents.download.tools import unlabelled_runs
+        runs = [{"run_accession": "SRR1", "sample_alias": "", "sample_title": "Mock rep1"},
+                {"run_accession": "SRR2", "sample_alias": "GSM2", "sample_title": "CoV2 rep1"}]
+        assert unlabelled_runs(runs) == ["SRR1"]
+
+    def test_resolve_reports_unlabelled(self, run_dir: Path):
+        with patch("agents.download.tools._resolve_study") as mock:
+            mock.return_value = [{"run_accession": "SRR1", "library_layout": "PAIRED", "sample_alias": "",
+                                  "sample_title": "", "files": [], "total_bytes": 0}]
+            result = resolve_accession("SRP001")
+        assert result["unlabelled_runs"] == ["SRR1"]
