@@ -365,6 +365,8 @@ def _publish_reference(results: Path, gtfs=("genes.filtered.gtf",), index_files=
     (results / "pipeline_info").mkdir()
     (results / "pipeline_info" / "nf_core_rnaseq_software_mqc_versions.yml").write_text(
         "SALMON_INDEX:\n  salmon: 1.10.3\nWorkflow:\n  nf-core/rnaseq: v3.26.0\n")
+    (results / "pipeline_info" / "params_2026-01-01_00-00-00.json").write_text(json.dumps({
+        "genome": "GRCh38", "gtf": "s3://ngi-igenomes/igenomes/Homo_sapiens/NCBI/GRCh38/Annotation/Genes/genes.gtf"}))
 
 
 class TestReferenceCache:
@@ -400,6 +402,7 @@ class TestReferenceCache:
         info = json.loads((ref / "reference.json").read_text())
         assert info["salmon_version"] == "1.10.3" and info["built_by_run"] == "run_1"
         assert info["copied_from"]["gtf"] == "genes.filtered.gtf"
+        assert info["gtf_source"].endswith("/NCBI/GRCh38/Annotation/Genes/genes.gtf")
         assert not list(ref.parent.glob(".*tmp*"))
         assert cache_reference("GRCh38", "3.26.0", results, "run_2")["status"] == "already_cached"
 

@@ -11,8 +11,10 @@ from pathlib import Path
 
 import pytest
 
+from agents.analysis import tools
 from agents.analysis.tools import (
     compute_qc,
+    read_multiqc,
     fetch_abstract,
     fetch_geo_metadata,
     filter_low_counts,
@@ -137,7 +139,15 @@ class TestScanResults:
 
     def test_finds_multiqc(self, nfcore_results_dir: Path):
         result = scan_results(str(nfcore_results_dir))
-        assert result["multiqc_found"] is True
+        assert len(result["multiqc_files"]) == 1
+
+    def test_finds_multiqc_in_any_layout(self, nfcore_results_dir: Path):
+        # nf-core/rnaseq 3.26 salmon-only writes multiqc/multiqc_report_data/ (no aligner subfolder)
+        flat = nfcore_results_dir / "multiqc" / "multiqc_report_data"
+        flat.mkdir(parents=True)
+        (flat / "multiqc_general_stats.txt").write_text("Sample\tsalmon-percent_mapped\nWT_REP1\t85.0\n")
+        result = scan_results(str(nfcore_results_dir))
+        assert len(result["multiqc_files"]) == 2
 
     def test_returns_error_for_bad_dir(self):
         result = scan_results("/nonexistent/path")
@@ -219,12 +229,26 @@ class TestComputeQC:
         assert len(result["pca"]) == 4
         assert len(result["variance_explained"]) == 2
 
-    def test_parses_multiqc(self, nfcore_results_dir: Path):
+    def test_reads_multiqc(self, nfcore_results_dir: Path):
+        mqc = nfcore_results_dir / "multiqc" / "star_salmon" / "multiqc_report_data" / "multiqc_general_stats.txt"
+        mqc.write_text(mqc.read_text() + "WT_REP1 Read 1\t\t\n")
         scan_results(str(nfcore_results_dir))
-        counts_path = nfcore_results_dir / "star_salmon" / "salmon.merged.gene_counts.tsv"
-        load_counts(str(counts_path))
-        result = compute_qc()
-        assert result["multiqc_summary"] is not None
+        load_counts(str(nfcore_results_dir / "star_salmon" / "salmon.merged.gene_counts.tsv"))
+        result = read_multiqc()
+        assert result["n_samples_matched"] == 4
+        assert result["columns"]["star-mapped_percent"]["KO_REP2"] == 92.0
+        facts = summarize_findings()["facts"]
+        assert facts["multiqc.star_mapped_percent.min"] == "89.00"
+        assert facts["multiqc.star_mapped_percent.max"] == "92.00"
+
+    def test_multiqc_asks_to_choose_between_files(self, nfcore_results_dir: Path):
+        flat = nfcore_results_dir / "multiqc" / "multiqc_report_data"
+        flat.mkdir(parents=True)
+        (flat / "multiqc_general_stats.txt").write_text("Sample\tsalmon-percent_mapped\nWT_REP1\t85.0\n")
+        scan_results(str(nfcore_results_dir))
+        assert read_multiqc()["error"] == "choose_file"
+        assert read_multiqc("/elsewhere/multiqc_general_stats.txt")["error"] == "unknown_file"
+        assert read_multiqc(str(flat / "multiqc_general_stats.txt"))["n_samples_matched"] == 1
 
     def test_summary_is_json_serializable(self, count_matrix_tsv: Path):
         load_counts(str(count_matrix_tsv))
@@ -531,7 +555,7 @@ class TestGenerateFigures:
         assert generate_figures(pca_color_by=["gsm"])["error"] == "bad_pca_columns"
 
 
-TABLES = "{{table:de_summary}}\n\n{{table:top_up}}\n\n{{table:top_down}}\n\n"
+TABLES = "{{table:de_summary}}\n\n{{table:top_up}}\n\n{{table:top_down}}\n\n{{table:methods}}\n\n"
 
 
 def _figs(skip: tuple[str, ...] = ()) -> str:
@@ -600,9 +624,19 @@ class TestPlaceholders:
                         "significant; design {{de.design}}; filter {{filter.min_count}}; "
                         "PyDESeq2 {{versions.pydeseq2}}; source {{provenance.data_source}}.")
         content = Path(write_report(md)["report_path"]).read_text()
-        for key in ("de.n_tested", "de.n_significant", "de.pct_significant", "de.design", "versions.pydeseq2"):
+        for key in ("de.n_tested", "de.n_significant", "de.pct_significant", "de.design"):
             assert facts[key] in content
         assert "{{" not in content
+
+    def test_version_facts_name_the_software_once(self, tmp_path, monkeypatch):
+        self._ready(tmp_path, monkeypatch)
+        facts = summarize_findings()["facts"]
+        assert facts["versions.pydeseq2"].startswith("PyDESeq2 ")
+        version = facts["versions.pydeseq2"].split()[-1]
+        md = self._full("A: tested with {{versions.pydeseq2}}. B: PyDESeq2 {{versions.pydeseq2}}. "
+                        "C: pydeseq2 ({{versions.pydeseq2}}).")
+        content = Path(write_report(md)["report_path"]).read_text()
+        assert f"A: tested with PyDESeq2 {version}. B: PyDESeq2 {version}. C: pydeseq2 ({version})." in content
 
     def test_fact_values_are_correct(self, tmp_path, monkeypatch):
         self._ready(tmp_path, monkeypatch)
@@ -731,13 +765,80 @@ class TestPlaceholders:
         generate_figures()
         assert write_report("{{nope}}")["error"] == "report_problems"
 
-    def test_no_de_no_required_tables(self, count_matrix_tsv):
+    def test_no_de_only_methods_required(self, count_matrix_tsv):
         SESSION.begin_run("test")
         load_counts(str(count_matrix_tsv))
         generate_figures()
-        result = write_report("QC only: {{samples.n}} samples.\n\n{{table:qc}}\n\n" + _figs())
+        assert "{{table:methods}}" in write_report("QC only.\n\n" + _figs())["message"]
+        result = write_report("QC only: {{samples.n}} samples.\n\n{{table:qc}}\n\n{{table:methods}}\n\n" + _figs())
         assert "error" not in result
-        assert "4 samples" in Path(result["report_path"]).read_text()
+        content = Path(result["report_path"]).read_text()
+        assert "4 samples" in content
+        assert "### Differential expression" not in content
+
+    def test_methods_section_is_code_only(self, tmp_path, monkeypatch):
+        self._ready(tmp_path, monkeypatch)
+        body = ("## Results\n\n" + TABLES.replace("{{table:methods}}", "") + "{{table:enrichment_up}}\n\n"
+                "{{table:enrichment_down}}\n\n" + _figs())
+        bad = write_report(body + "## 9. Methods\n\nThe Wald test was applied to log counts.\n\n"
+                           "{{table:methods}}\n\n## References\n\nNone.")
+        assert bad["error"] == "report_problems" and "'## 9. Methods' must contain only" in bad["message"]
+        good = write_report(body + "## 9. Methods\n\n{{table:methods}}\n\n## References\n\nNone.")
+        content = Path(good["report_path"]).read_text()
+        assert "negative binomial" in content and "Wald test" in content
+        assert "Genes were kept when at least 2 samples had ≥ 10 counts" in content
+        assert "enrichment_input_upregulated.txt" in content and "Enrichr's default background" in content
+        assert "| PyDESeq2 |" in content
+
+
+class TestMethods:
+    def test_nfcore_reference_and_rounding(self, nfcore_results_dir: Path):
+        SESSION.begin_run("test")
+        info = nfcore_results_dir / "pipeline_info"
+        info.mkdir()
+        (info / "params_2026-01-01_00-00-00.json").write_text(json.dumps({
+            "genome": "GRCh38",
+            "gtf": "s3://ngi-igenomes/igenomes//Homo_sapiens/NCBI/GRCh38/Annotation/Genes/genes.gtf"}))
+        scan_results(str(nfcore_results_dir))
+        load_counts(str(nfcore_results_dir / "star_salmon" / "salmon.merged.gene_counts.tsv"))
+        SESSION.deseq_rounded_pct = 37.5
+        facts = summarize_findings()["facts"]
+        assert facts["reference.annotation_provider"] == "NCBI"
+        assert facts["reference.annotation"] == "iGenomes Homo sapiens NCBI GRCh38"
+        methods = tools._methods()
+        assert "Reference genome: `GRCh38`" in methods and "iGenomes Homo sapiens NCBI GRCh38" in methods
+
+    def test_cached_reference_reports_original_annotation(self, nfcore_results_dir: Path, tmp_path: Path):
+        SESSION.begin_run("test")
+        cache = tmp_path / "reference" / "GRCh38" / "nf-core-rnaseq-3.26.0"
+        cache.mkdir(parents=True)
+        (cache / "reference.json").write_text(json.dumps({
+            "gtf_source": "s3://ngi-igenomes/igenomes/Homo_sapiens/NCBI/GRCh38/Annotation/Genes/genes.gtf"}))
+        info = nfcore_results_dir / "pipeline_info"
+        info.mkdir()
+        (info / "params_x.json").write_text(json.dumps({"gtf": str(cache / "genes.gtf")}))
+        scan_results(str(nfcore_results_dir))
+        ref = tools._reference_provenance()
+        assert ref["annotation_provider"] == "NCBI" and ref["cached_reference"] == str(cache)
+
+
+class TestPcaGroups:
+    def test_spread_and_misclustered(self, tmp_path: Path):
+        _analysed(tmp_path)
+        facts = summarize_findings()["facts"]
+        for key in ("qc.pca_spread.wt", "qc.pca_spread.ko", "qc.pca_centroid_distance",
+                    "qc.pca_condition_r2_pc1", "qc.pca_misclustered", "qc.pca_summary"):
+            assert key in facts
+        assert facts["qc.pca_misclustered"] == "none"
+        caption = {f["path"]: f["caption"] for f in generate_figures() and SESSION.figures}["figures/pca.png"]
+        assert facts["qc.pca_summary"] in caption
+
+    def test_flags_sample_closer_to_other_group(self, tmp_path: Path):
+        _analysed(tmp_path)
+        wt = [s for s in SESSION.counts_df.columns if SESSION.design_df.loc[s, "condition"] == "WT"]
+        SESSION.design_df.loc[wt[0], "condition"] = "KO"  # a mislabelled sample sits with the other group
+        groups = tools._pca_groups()
+        assert wt[0] in groups["misclustered"]
 
 
 class TestProvenance:

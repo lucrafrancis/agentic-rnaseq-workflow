@@ -118,9 +118,25 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "name": "compute_qc",
         "description": "Compute QC metrics: library sizes, gene detection rates, PCA on "
-        "log2(counts+1) for outlier detection. Parses MultiQC stats if available. "
-        "Requires load_counts first.",
+        "log2(counts+1) for outlier detection. Requires load_counts first.",
         "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "read_multiqc",
+        "description": "Read MultiQC general statistics from the nf-core results (e.g. mapping "
+        "rate, duplication, GC, trimming) — whichever columns this pipeline version reports. "
+        "Use when scan_results lists multiqc_files. Requires scan_results; call after "
+        "load_counts so rows are matched to the analysis samples.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "One of scan_results' multiqc_files. Optional when there is only one.",
+                },
+            },
+            "required": [],
+        },
     },
     {
         "name": "filter_low_counts",
@@ -272,6 +288,7 @@ TOOL_FUNCTIONS: dict[str, Callable[..., dict[str, Any]]] = {
     "inspect_counts": tools.inspect_counts,
     "set_design": tools.set_design,
     "compute_qc": tools.compute_qc,
+    "read_multiqc": tools.read_multiqc,
     "filter_low_counts": tools.filter_low_counts,
     "run_deseq2": tools.run_deseq2,
     "get_top_genes": tools.get_top_genes,

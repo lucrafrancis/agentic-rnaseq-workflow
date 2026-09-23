@@ -109,6 +109,7 @@ def cache_reference(genome: str, revision: str, results_dir: Path, run_name: str
             "salmon_version": _salmon_version(results_dir),
             "built_by_run": run_name,
             "copied_from": {"gtf": gtf.name, "transcripts_fa": transcripts[0].name, "salmon_index": "index/salmon"},
+            **_input_sources(results_dir),
             "md5": {"genes.gtf": _md5(tmp / "genes.gtf"), "transcripts.fa": _md5(tmp / "transcripts.fa")},
             "created": datetime.now().isoformat(timespec="seconds"),
         }
@@ -118,6 +119,16 @@ def cache_reference(genome: str, revision: str, results_dir: Path, run_name: str
         shutil.rmtree(tmp, ignore_errors=True)
         raise
     return {"status": "cached", "path": str(dest)}
+
+
+def _input_sources(results_dir: Path) -> dict[str, str]:
+    """The GTF and FASTA nf-core was given (e.g. iGenomes URLs), from its params file, so
+    runs reusing this cache can still report which annotation it came from."""
+    params_files = sorted((results_dir / "pipeline_info").glob("params_*.json"))
+    if not params_files:
+        return {}
+    params = json.loads(params_files[-1].read_text())
+    return {f"{key}_source": str(params[key]) for key in ("gtf", "fasta") if params.get(key)}
 
 
 def _salmon_version(results_dir: Path) -> str | None:

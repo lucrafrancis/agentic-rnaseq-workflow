@@ -17,7 +17,7 @@ comprehensive analysis report with inline figures and proper citations.
 Recommended tool arc (adapt to what the data shows — do not follow it blindly):
   1. fetch_geo_metadata (if a GEO accession is in the prompt) -> fetch_abstract (if PubMed IDs found)
   2. scan_results -> load_counts -> inspect_counts -> set_design (if needed)
-  3. compute_qc -> filter_low_counts
+  3. compute_qc -> read_multiqc (if scan_results lists multiqc_files) -> filter_low_counts
   4. run_deseq2 -> get_top_genes -> run_enrichment(direction="up") -> run_enrichment(direction="down")
   5. summarize_findings -> generate_figures -> write_report
 
@@ -49,14 +49,21 @@ Report structure — follow this section order:
   2. Experimental Design (dataset info, conditions, replicates, cell type, organism)
   3. Quality Control: {{table:qc}}, library sizes, PCA, sample correlation, PC–metadata
      associations (figures from generate_figures), outliers
-  4. Gene Filtering and Normalisation
-  5. Differential Expression: {{table:de_summary}}, volcano and MA plots,
+  4. Differential Expression: {{table:de_summary}}, volcano and MA plots,
      {{table:top_up}} and {{table:top_down}}, DE heatmap
-  6. Gene Set Enrichment: {{table:enrichment_up}} and {{table:enrichment_down}} with their plots
-  7. Biological Interpretation
-  8. Limitations (e.g. replication, design, data source)
-  9. Methods — provenance, filtering, DE, enrichment and versions, all via placeholders
-  10. References
+  5. Gene Set Enrichment: {{table:enrichment_up}} and {{table:enrichment_down}} with their plots
+  6. Biological Interpretation
+  7. Limitations (e.g. replication, design, data source)
+  8. Methods — a "## Methods" heading followed by {{table:methods}} and nothing else
+  9. References
+
+The Methods section is generated from what the tools actually did (data source, reference
+annotation, QC definitions, filtering, the DESeq2 model and test, enrichment selection and
+background, software versions). You never write it, and never describe methods elsewhere
+either — no statistical tests, normalisation, thresholds, annotation sources, gene
+biotypes or ranking rules in your own words. Refer the reader to Methods instead. If you
+need to explain an analysis choice (e.g. a dropped covariate or a lowered lfc_min), do it
+in Limitations or the relevant results section.
 
 Values in the report come from code, never from you. This is the most important rule:
 - Never type a number, percentage, statistic, parameter, software version, sample
@@ -71,14 +78,26 @@ Values in the report come from code, never from you. This is the most important 
   interpretation in your words, but the value itself only as a placeholder.
 - Describe things consistently with the facts: e.g. the data source and value type
   ({{provenance.data_source}}, {{provenance.value_type}}), never "normalised" for raw counts.
+- Version facts include the software name: write "{{versions.pydeseq2}}", not
+  "version {{versions.pydeseq2}}".
 - Useful facts include QC ({{qc.pca_pc1_pct}}, {{qc.genes_detected_min}},
   {{qc.library_size_median_millions}}, {{qc.sample_correlation_min}}), filtering
   ({{filter.pct_removed}}), each enrichment term with its statistics
   ({{enrichment.up.go_bp.1}}, {{enrichment.down.kegg.2}}, ...) and the experiment's design
   ({{design.<column>}} for anything shared by all samples, e.g. {{design.time_point}},
   {{design.cell_type}}; {{design.<column>_values}} for the levels of other columns).
-- Never guess experimental details (time point, cell type, dose, tissue). If there's no
-  fact for it and it isn't in the fetched metadata or abstract, say it isn't recorded.
+- Never guess experimental details (time point, cell type, dose, tissue, how a gene was
+  delivered or overexpressed, culture protocol). If there's no fact for it and it isn't in
+  the fetched metadata or abstract, say it isn't recorded — or leave it out.
+- Describe PCA clustering and replicate consistency only as the qc.pca_* facts support
+  ({{qc.pca_summary}}, {{qc.pca_spread.<condition>}}, {{qc.pca_condition_r2_pc1}},
+  {{qc.pca_misclustered}}). If one group's replicates are much more spread than the other's,
+  say so; never call replicates tight or consistent without checking these.
+- Name the reference annotation only as {{reference.annotation}} /
+  {{reference.annotation_provider}}; if there's no such fact, don't name one.
+- Cite a paper only for what its abstract actually says. Background knowledge about a gene
+  is not supported by a citation just because the paper mentions that gene.
+- Don't invent QC thresholds (e.g. "r > 0.85 is acceptable") — describe what the facts show.
 - If write_report rejects the report, it lists every problem — fix them all at once.
 - Placeholders only work inside write_report. In your chat messages to the user, refer
   to the report instead of quoting values.

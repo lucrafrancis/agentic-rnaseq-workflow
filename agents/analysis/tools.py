@@ -184,7 +184,6 @@ def scan_results(results_dir: str) -> Summary:
 
     counts_path = None
     tpm_path = None
-    mqc_path = None
     design_path = None
     source = "unknown"
 
@@ -201,11 +200,6 @@ def scan_results(results_dir: str) -> Summary:
         if nf_tpm.is_file():
             tpm_path = nf_tpm
 
-        for mqc_subdir in ("star_salmon", "salmon"):
-            candidate = rdir / "multiqc" / mqc_subdir / "multiqc_report_data" / "multiqc_general_stats.txt"
-            if candidate.is_file():
-                mqc_path = candidate
-                break
 
     # --- Fall back to scanning for loose tabular files ---
     if counts_path is None:
@@ -249,6 +243,7 @@ def scan_results(results_dir: str) -> Summary:
             tabular_files.append(p.name)
 
     SESSION.results_dir = rdir
+    mqc_files = _multiqc_stats_files()
 
     return {
         "results_dir": str(rdir),
@@ -257,8 +252,7 @@ def scan_results(results_dir: str) -> Summary:
         "counts_path": str(counts_path) if counts_path else None,
         "tpm_found": tpm_path is not None,
         "tpm_path": str(tpm_path) if tpm_path else None,
-        "multiqc_found": mqc_path is not None,
-        "multiqc_path": str(mqc_path) if mqc_path else None,
+        "multiqc_files": [str(p) for p in mqc_files],
         "design_found": design_path is not None,
         "design_path": str(design_path) if design_path else None,
         "tabular_files": tabular_files,
@@ -511,7 +505,8 @@ def compute_qc() -> Summary:
 
     lib_sizes = {s: int(counts[s].sum()) for s in samples}
     genes_detected = {s: int((counts[s] > 0).sum()) for s in samples}
-    SESSION.qc_snapshot = {"library_sizes": pd.Series(lib_sizes), "genes_detected": pd.Series(genes_detected)}
+    SESSION.qc_snapshot = {"library_sizes": pd.Series(lib_sizes), "genes_detected": pd.Series(genes_detected),
+                           "filtered": SESSION.filter_settings is not None}
 
     # PCA on log2(counts + 1)
     log_counts = np.log2(counts.values.astype(float).T + 1)  # samples x genes
@@ -525,25 +520,6 @@ def compute_qc() -> Summary:
         for i in range(len(samples))
     }
 
-    # Parse MultiQC if available
-    multiqc_summary = None
-    if SESSION.results_dir:
-        for mqc_subdir in ("star_salmon", "salmon"):
-            mqc_path = SESSION.results_dir / "multiqc" / mqc_subdir / "multiqc_report_data" / "multiqc_general_stats.txt"
-            if mqc_path.is_file():
-                mqc = pd.read_csv(mqc_path, sep="\t")
-                # Filter out per-read rows (e.g., "WT_REP1 Read 1")
-                mqc = mqc[~mqc["Sample"].str.contains(" Read ", na=False)]
-                key_cols = [c for c in mqc.columns if any(k in c for k in ("mapped_percent", "PERCENT_DUPLICATION", "total_sequences"))]
-                if key_cols:
-                    mqc_subset = mqc.set_index("Sample")[key_cols]
-                    multiqc_summary = {
-                        sample: {col.split("-")[-1]: round(float(val), 2) for col, val in row.items() if pd.notna(val)}
-                        for sample, row in mqc_subset.iterrows()
-                    }
-                SESSION.multiqc_stats = mqc
-                break
-
     return {
         "library_sizes": lib_sizes,
         "library_size_distribution": _quantile_summary(list(lib_sizes.values())),
@@ -552,7 +528,53 @@ def compute_qc() -> Summary:
         "variance_explained": [round(v, 4) for v in var_explained],
         "pca_note": "This PCA is on unfiltered counts. The report's PCA figure and "
                     "{{qc.pca_pc1_pct}}/{{qc.pca_pc2_pct}} use the filtered matrix — cite those.",
-        "multiqc_summary": multiqc_summary,
+    }
+
+
+def _multiqc_stats_files() -> list[Path]:
+    """Every MultiQC general-stats table under results/ — the folder layout differs
+    between nf-core/rnaseq versions and aligners, so search rather than assume."""
+    if not SESSION.results_dir:
+        return []
+    return sorted(p.resolve() for p in SESSION.results_dir.rglob("multiqc_general_stats.txt"))
+
+
+def read_multiqc(path: str | None = None) -> Summary:
+    """MultiQC general statistics (mapping rate, duplication, GC, trimming, ...) with
+    whatever columns this nf-core version reports. Requires scan_results first."""
+    if SESSION.results_dir is None:
+        return {"error": "no_results_dir", "message": "Call scan_results first."}
+    files = _multiqc_stats_files()
+    if not files:
+        return {"error": "not_found", "message": "No multiqc_general_stats.txt under the results directory."}
+    if path is None and len(files) > 1:
+        return {"error": "choose_file", "message": "Several MultiQC tables found; pass one as path.",
+                "candidates": [str(p) for p in files]}
+    chosen = files[0] if path is None else Path(path).resolve()
+    if chosen not in files:
+        return {"error": "unknown_file", "message": f"'{path}' is not one of the MultiQC tables found.",
+                "candidates": [str(p) for p in files]}
+
+    table = pd.read_csv(chosen, sep="\t").set_index("Sample")
+    # MultiQC adds extra rows (e.g. per-read "S1 Read 1"); keep only this analysis's samples.
+    samples = list(SESSION.counts_df.columns) if SESSION.counts_df is not None else list(table.index)
+    matched = table.loc[[s for s in samples if s in table.index]].dropna(axis=1, how="all")
+    SESSION.multiqc_stats = matched
+
+    columns: dict[str, Any] = {}
+    for col in matched.columns:
+        values = matched[col].dropna()
+        if pd.api.types.is_numeric_dtype(values):
+            columns[col] = ({s: round(float(v), 2) for s, v in values.items()} if len(values) <= 24
+                            else _quantile_summary(values.tolist()))
+        else:
+            columns[col] = sorted(set(map(str, values)))
+    return {
+        "path": str(chosen),
+        "n_samples_matched": len(matched),
+        "samples_missing": [s for s in samples if s not in table.index],
+        "columns": columns,
+        "facts": [f"multiqc.{_key(c)}.min|median|max" for c in matched.select_dtypes("number").columns],
     }
 
 
@@ -657,6 +679,7 @@ def run_deseq2(contrast: list[str], covariates: list[str] | None = None) -> Summ
     SESSION.deseq_results = results
     SESSION.deseq_design = formula
     SESSION.deseq_contrast = [factor, test, ref]
+    SESSION.deseq_rounded_pct = round(frac_non_int * 100, 1) if counts_rounded else None
 
     # Write to disk
     paths = SESSION.require_paths()
@@ -955,6 +978,10 @@ def _software_versions() -> dict[str, str]:
     return versions
 
 
+_DISPLAY_NAMES = {"python": "Python", "numpy": "NumPy", "pandas": "pandas", "pydeseq2": "PyDESeq2",
+                  "matplotlib": "Matplotlib", "scipy": "SciPy", "gseapy": "GSEApy", "salmon": "Salmon"}
+
+
 def _pipeline_versions() -> dict[str, str]:
     if not SESSION.results_dir:
         return {}
@@ -970,6 +997,9 @@ def _pipeline_versions() -> dict[str, str]:
     salmon = (data.get("SALMON_QUANT") or {}).get("salmon")
     if salmon:
         out["salmon"] = str(salmon)
+    tximeta = (data.get("TXIMETA_TXIMPORT") or {}).get("bioconductor-tximeta")
+    if tximeta:
+        out["tximeta"] = str(tximeta)
     return out
 
 
@@ -1016,6 +1046,181 @@ def _sample_correlation() -> pd.DataFrame:
     return np.log2(SESSION.counts_df.astype(float) + 1).corr(method="pearson")
 
 
+def _qc_before_filtering() -> bool:
+    """Library sizes and genes detected come from a compute_qc run before filtering."""
+    return (SESSION.qc_snapshot is not None and not SESSION.qc_snapshot["filtered"]
+            and SESSION.filter_settings is not None)
+
+
+def _pca_groups() -> dict[str, Any] | None:
+    """Replicate spread and group separation on PC1-PC2 of the PCA figure, so the report
+    describes clustering from numbers rather than by eye."""
+    counts, design = SESSION.counts_df, SESSION.design_df
+    if counts is None or design is None or "condition" not in design.columns or counts.shape[1] < 3:
+        return None
+    pca = _pca()
+    if pca["n_pcs"] < 2:
+        return None
+    xy = pd.DataFrame(pca["coords"][:, :2], index=pca["samples"], columns=["PC1", "PC2"])
+    cond = design.loc[xy.index, "condition"].astype(str)
+    if cond.nunique() < 2:
+        return None
+    centroids = xy.groupby(cond).mean()
+
+    def dist(sample, group) -> float:
+        return float(np.linalg.norm(xy.loc[sample] - centroids.loc[group]))
+
+    spread = {g: float(np.mean([dist(s, g) for s in xy.index[cond == g]])) for g in centroids.index}
+    pairs = [(a, b, float(np.linalg.norm(centroids.loc[a] - centroids.loc[b])))
+             for i, a in enumerate(centroids.index) for b in centroids.index[i + 1:]]
+    closest = min(pairs, key=lambda p: p[2])
+    misclustered = {s: min(centroids.index, key=lambda g: dist(s, g)) for s in xy.index}
+    misclustered = {s: g for s, g in misclustered.items() if g != cond[s]}
+    r2 = {}
+    for pc in ("PC1", "PC2"):
+        v = xy[pc]
+        ss_total = float(((v - v.mean()) ** 2).sum())
+        ss_between = sum(len(v[cond == g]) * (v[cond == g].mean() - v.mean()) ** 2 for g in centroids.index)
+        r2[pc] = ss_between / ss_total if ss_total else 0.0
+    return {"spread": spread, "closest_pair": closest, "misclustered": misclustered, "condition_r2": r2}
+
+
+def _pca_summary(groups: dict[str, Any]) -> str:
+    spread = groups["spread"]
+    a, b, d = groups["closest_pair"]
+    what = "group centroids are" if len(spread) == 2 else f"the closest group centroids ({a}, {b}) are"
+    mis = ", ".join(f"{s} (closer to {g})" for s, g in groups["misclustered"].items()) or "none"
+    text = ("On PC1–PC2, mean distance of replicates to their group centroid: "
+            + ", ".join(f"{g} {v:.1f}" for g, v in spread.items()) + f"; {what} {d:.1f} apart.")
+    if min(spread.values()) > 0:
+        text += f" The most spread group is {max(spread.values()) / min(spread.values()):.1f}× the least spread."
+    return (text + f" Condition explains {groups['condition_r2']['PC1']:.0%} of PC1 and "
+            f"{groups['condition_r2']['PC2']:.0%} of PC2 variance. Samples closer to another group's "
+            f"centroid: {mis}.")
+
+
+def _reference_provenance() -> dict[str, str]:
+    """The genome and annotation nf-core actually used, from its own params file."""
+    if not SESSION.results_dir:
+        return {}
+    params_files = sorted((SESSION.results_dir / "pipeline_info").glob("params_*.json"))
+    if not params_files:
+        return {}
+    params = _json.loads(params_files[-1].read_text())
+    out: dict[str, str] = {}
+    if params.get("genome"):
+        out["genome"] = str(params["genome"])
+    gtf = params.get("gtf") or params.get("gff")
+    if gtf:
+        source = str(gtf)
+        cached = Path(source).parent / "reference.json"
+        if "://" not in source and cached.is_file():  # shared reference cache (agents/submission/reference.py)
+            out["cached_reference"] = str(cached.parent)
+            source = _json.loads(cached.read_text()).get("gtf_source") or source
+        out["annotation_file"] = source
+        m = re.search(r"/igenomes/+([^/]+)/([^/]+)/([^/]+)/", source)
+        if m:
+            out["annotation"] = f"iGenomes {m.group(1).replace('_', ' ')} {m.group(2)} {m.group(3)}"
+            out["annotation_provider"] = m.group(2)
+        elif params.get("gencode"):
+            out["annotation"] = out["annotation_provider"] = "GENCODE"
+    return out
+
+
+def _methods() -> str:
+    """The Methods section, written from what the tools actually did. The LLM places it
+    with {{table:methods}} and never describes the methods itself."""
+    f = _facts()
+    source, prov = _data_provenance()
+    ref = _reference_provenance()
+    sections: list[tuple[str, str]] = []
+
+    if source == "nf-core/rnaseq":
+        text = (f"Reads were processed with {f.get('pipeline.nf_core_rnaseq', 'nf-core/rnaseq')}"
+                + (f" ({f['pipeline.nextflow']})" if "pipeline.nextflow" in f else "") + ". "
+                f"Quantification: {prov['quantification']}"
+                + (f" ({f['pipeline.salmon']})" if "pipeline.salmon" in f else "") + "; the pipeline "
+                "summarised transcript estimates to gene-level counts"
+                + (f" with {f['pipeline.tximeta']}" if "pipeline.tximeta" in f else "")
+                + f", in `{Path(prov['counts_file']).name}`.")
+        if ref.get("genome"):
+            text += f" Reference genome: `{ref['genome']}`."
+        if ref.get("annotation_file"):
+            text += (f" Gene annotation: {ref.get('annotation', 'GTF')} (`{ref['annotation_file']}`)"
+                     + (", reused from the shared reference cache" if "cached_reference" in ref else "") + ".")
+        sections.append(("Data and quantification", text))
+    elif source == "GEO count matrix":
+        sections.append(("Data", (
+            f"Counts: {prov['source']} `{prov['file']}` from GEO {prov['accession']} (MD5 `{prov['md5']}`); "
+            f"values: {str(prov['value_type']).replace('_', ' ')}; gene IDs: {prov['gene_id_type']}; "
+            f"{prov['n_duplicate_gene_ids_summed']} duplicate gene IDs summed.")))
+    else:
+        sections.append(("Data", f"Counts were provided by the user (`{prov.get('counts_file')}`)."))
+
+    if SESSION.counts_df is not None:
+        when = " before low-count filtering" if _qc_before_filtering() else ""
+        matrix = (f"the filtered matrix ({f['filter.genes_after']} genes)" if SESSION.filter_settings
+                  else "all genes")
+        text = (f"Library size is the total count per sample and genes detected the number of genes with "
+                f"at least one count, both computed{when or ' on the loaded matrix'}. PCA: singular value "
+                f"decomposition of gene-centred log2(counts + 1) of {matrix}, without scaling. Sample "
+                f"correlation: Pearson correlation of log2(counts + 1) of {matrix}.")
+        if SESSION.multiqc_stats is not None:
+            text += " Read-level metrics come from the pipeline's MultiQC general statistics."
+        sections.append(("Quality control", text))
+
+    if SESSION.filter_settings:
+        sections.append(("Low-count filtering", (
+            f"Genes were kept when at least {f['filter.min_samples']} samples had ≥ {f['filter.min_count']} "
+            f"counts: {f['filter.genes_after']} of {f['filter.genes_before']} genes kept "
+            f"({f['filter.pct_removed']} removed).")))
+
+    if SESSION.deseq_results is not None:
+        factor, test, ref_level = SESSION.deseq_contrast
+        covariates = [c.strip() for c in str(SESSION.deseq_design).lstrip("~").split("+")][:-1]
+        text = ""
+        if SESSION.deseq_rounded_pct is not None:
+            text += (f"Non-integer estimated counts ({SESSION.deseq_rounded_pct}% of values) were rounded "
+                     "to integers. ")
+        text += (
+            f"Differential expression was tested with {f.get('versions.pydeseq2', 'PyDESeq2')} using the "
+            f"design `{SESSION.deseq_design}`"
+            + (f" (covariates {', '.join(covariates)} treated as categorical)" if covariates else "")
+            + f", comparing {test} with {ref_level} (reference level). PyDESeq2 fits a negative binomial "
+            "generalised linear model per gene, with median-of-ratios size factors and dispersions "
+            f"shrunk towards a fitted trend, and tests the {factor} coefficient with a Wald test. "
+            "P-values were adjusted with the Benjamini–Hochberg method after PyDESeq2's default "
+            f"independent filtering and Cook's-distance outlier handling; {f['de.n_tested']} genes "
+            f"received an adjusted p-value. Genes with padj < {_DE_PADJ} are called significant. "
+            "Log2 fold changes are unshrunken maximum-likelihood estimates.")
+        sections.append(("Differential expression", text))
+
+    for label, e in (SESSION.enrichment_results or {}).items():
+        sel = e.get("selection") or {}
+        direction = {"upregulated": "up-regulated", "downregulated": "down-regulated"}.get(label, label)
+        text = (f"Over-representation analysis of {direction} genes used Enrichr through "
+                f"{f.get('versions.gseapy', 'GSEApy')} against {', '.join(e['gene_sets'])} ({e['organism']}). ")
+        if sel:
+            text += (f"Genes with padj < {sel['padj_max']} and |log2FC| ≥ {sel['lfc_min']} "
+                     f"({_fmt_int(sel['n_passing'])} genes) were ranked by padj, then |log2FC|, and the top "
+                     f"{_fmt_int(min(sel['n_passing'], sel['max_genes']))} submitted as "
+                     f"{_fmt_int(e['n_input_genes'])} gene symbols")
+            text += (f" ({sel['n_without_symbol']} without a symbol excluded). " if sel.get("n_without_symbol")
+                     else ". ")
+        text += ("Enrichr's default background (all genes in each library) was used, not the genes tested "
+                 "here. Terms are reported by Enrichr's adjusted p-value (Benjamini–Hochberg). Exact input: "
+                 f"`analysis/enrichment_input_{label}.txt`.")
+        sections.append((f"Enrichment ({direction})", text))
+
+    versions = {**{_DISPLAY_NAMES.get(k, k): v for k, v in _software_versions().items()},
+                **{f"nf-core: {_DISPLAY_NAMES.get(k, k)}": v for k, v in _pipeline_versions().items()}}
+    sections.append(("Software", _md_table(["Software", "Version"], [[k, v] for k, v in versions.items()])))
+    sections.append(("Reproducibility", (
+        "Every analysis step is logged in `analysis/tool_calls.jsonl`, and `analysis/replay.py` re-runs "
+        "them without the LLM. This Methods section is generated from those steps, not written by the LLM.")))
+    return "\n\n".join(f"### {title}\n\n{body}" for title, body in sections)
+
+
 def _library_key(gene_set: str) -> str:
     if gene_set.startswith("GO_Biological_Process"):
         return "go_bp"
@@ -1052,6 +1257,23 @@ def _facts() -> dict[str, str]:
             if pca["n_pcs"] > 1:
                 f["qc.pca_pc2_pct"] = f"{pca['var_exp'][1]:.1%}"
             f["qc.sample_correlation_min"] = f"{_sample_correlation().values.min():.2f}"
+        groups = _pca_groups()
+        if groups:
+            for g, v in groups["spread"].items():
+                f[f"qc.pca_spread.{_key(g)}"] = f"{v:.1f}"
+            f["qc.pca_centroid_distance"] = f"{groups['closest_pair'][2]:.1f}"
+            f["qc.pca_condition_r2_pc1"] = f"{groups['condition_r2']['PC1']:.0%}"
+            f["qc.pca_condition_r2_pc2"] = f"{groups['condition_r2']['PC2']:.0%}"
+            f["qc.pca_misclustered"] = ", ".join(groups["misclustered"]) or "none"
+            f["qc.pca_summary"] = _pca_summary(groups)
+    for k, v in _reference_provenance().items():
+        if k in ("genome", "annotation", "annotation_provider"):
+            f[f"reference.{k}"] = v
+    if SESSION.multiqc_stats is not None:
+        for col in SESSION.multiqc_stats.select_dtypes("number").columns:
+            values = SESSION.multiqc_stats[col].dropna()
+            for stat in ("min", "median", "max"):
+                f[f"multiqc.{_key(col)}.{stat}"] = f"{getattr(values, stat)():,.2f}"
     if SESSION.design_df is not None and SESSION.counts_df is not None:
         design = SESSION.design_df.loc[[c for c in SESSION.counts_df.columns if c in SESSION.design_df.index]]
         per = design["condition"].value_counts()
@@ -1115,10 +1337,12 @@ def _facts() -> dict[str, str]:
             f[f"{pre}.max_genes"] = _fmt_int(sel["max_genes"])
             f[f"{pre}.n_passing"] = _fmt_int(sel["n_passing"])
 
+    # Versions render with the tool name ("PyDESeq2 0.5.4"); write_report drops the name
+    # again when the prose already says it.
     for k, v in _software_versions().items():
-        f[f"versions.{k}"] = v
+        f[f"versions.{k}"] = f"{_DISPLAY_NAMES.get(k, k)} {v}"
     for k, v in _pipeline_versions().items():
-        f[f"pipeline.{_key(k)}"] = v
+        f[f"pipeline.{_key(k)}"] = f"{_DISPLAY_NAMES.get(k, k)} {v}"
     return f
 
 
@@ -1140,7 +1364,9 @@ def _tables() -> dict[str, str]:
             cond = (str(SESSION.design_df.loc[s_, "condition"])
                     if SESSION.design_df is not None and s_ in SESSION.design_df.index else "")
             rows.append([s_, cond, _fmt_int(lib[s_]), _fmt_int(detected[s_])])
-        t["qc"] = _md_table(["Sample", "Condition", "Total counts", "Genes detected"], rows)
+        t["qc"] = _md_table(["Sample", "Condition", "Total counts", "Genes detected"], rows) + (
+            "\n\n*Genes detected: genes with at least one count"
+            + (", before low-count filtering" if _qc_before_filtering() else "") + ".*")
     if SESSION.deseq_results is not None:
         t["de_summary"] = _md_table(["Measure", "Value"], [
             ["Contrast", facts["de.contrast"]],
@@ -1166,12 +1392,14 @@ def _tables() -> dict[str, str]:
         t[name] = _md_table(["Library", "Term", "Overlap", "padj"], rows) if rows else "_No enriched terms returned._"
     versions = {**_software_versions(), **{f"nf-core: {k}": v for k, v in _pipeline_versions().items()}}
     t["versions"] = _md_table(["Software", "Version"], [[k, v] for k, v in versions.items()])
+    if SESSION.counts_df is not None:
+        t["methods"] = _methods()
     return t
 
 
 def _required_tables() -> list[str]:
     """Tables the report must place, given what the analysis produced."""
-    req = []
+    req = ["methods"] if SESSION.counts_df is not None else []
     if SESSION.deseq_results is not None:
         req += ["de_summary", "top_up", "top_down"]
     for label in SESSION.enrichment_results or {}:
@@ -1251,7 +1479,7 @@ def _draw_figures(pca_color_by: list[str]) -> list[dict]:
                 ax.bar([], [], color=color, label=cond)
             ax.legend(fontsize=9, frameon=False)
         _save(fig, "library_sizes.png",
-              f"Total counts per sample{' before low-count filtering' if SESSION.qc_snapshot else ''} "
+              f"Total counts per sample{' before low-count filtering' if _qc_before_filtering() else ''} "
               f"({len(samples)} samples, {min(lib_sizes) / 1e6:.1f}–{max(lib_sizes) / 1e6:.1f} million), "
               f"coloured by condition.")
 
@@ -1282,7 +1510,8 @@ def _draw_figures(pca_color_by: list[str]) -> list[dict]:
         _save(fig, "pca.png",
               f"PCA of log2(counts + 1): PC1 {var_exp[0]:.1%}"
               + (f", PC2 {var_exp[1]:.1%}" if pca_data["n_pcs"] > 1 else "")
-              + " of variance, coloured by condition.")
+              + " of variance, coloured by condition."
+              + (f" {_pca_summary(groups)}" if (groups := _pca_groups()) else ""))
 
     # --- PCA coloured by other metadata variables ---
     if pca_data is not None and SESSION.design_df is not None:
@@ -1538,6 +1767,22 @@ def generate_figures(pca_color_by: list[str] | None = None) -> Summary:
 
 
 _PLACEHOLDER = re.compile(r"\{\{\s*([^{}]+?)\s*\}\}")
+_HEADING = re.compile(r"^(#{1,6})\s+(.*)$", re.MULTILINE)
+_METHODS_ONLY = re.compile(r"\{\{\s*table:(methods|versions)\s*\}\}")
+
+
+def _methods_prose(report_markdown: str) -> list[str]:
+    """Headings of Methods sections that contain anything besides {{table:methods}}."""
+    headings = list(_HEADING.finditer(report_markdown))
+    bad = []
+    for i, h in enumerate(headings):
+        if not re.match(r"(\d+\.?\s*)?(materials and )?methods\b", h.group(2).strip(), re.IGNORECASE):
+            continue
+        level = len(h.group(1))
+        end = next((n.start() for n in headings[i + 1:] if len(n.group(1)) <= level), len(report_markdown))
+        if _METHODS_ONLY.sub("", report_markdown[h.end():end]).strip():
+            bad.append(h.group(0).strip())
+    return bad
 _MAX_REPORT_REJECTIONS = 2
 
 
@@ -1618,6 +1863,11 @@ def write_report(report_markdown: str) -> Summary:
         if rendered is None:
             problems.append(f"unknown placeholder: {{{{{key}}}}}")
             return f"⚠[unknown: {{{{{key}}}}}]"
+        if key.startswith(("versions.", "pipeline.")):
+            # Lossless: "PyDESeq2 {{versions.pydeseq2}}" must not print the name twice.
+            name, _, version = rendered.rpartition(" ")
+            if re.search(rf"{re.escape(name)}\s*\(?\s*$", m.string[:m.start()], re.IGNORECASE):
+                return version
         return rendered
 
     def _bare_image(m: re.Match) -> str:
@@ -1628,6 +1878,9 @@ def write_report(report_markdown: str) -> Summary:
         problems.append(f"malformed image reference {m.group(0)} — use ![description](figures/<name>.png)")
         return f"{m.group(0)} *⚠ malformed image reference*"
 
+    problems += [f"'{h}' must contain only {{{{table:methods}}}} — the Methods section is generated from "
+                 "what the tools did. Move other text (e.g. why a covariate was dropped) to Limitations "
+                 "or the relevant results section." for h in _methods_prose(report_markdown)]
     report = _BARE_IMAGE.sub(_bare_image, report_markdown)
     report = _IMAGE_LINK.sub(_figure, report)
     report = _PLACEHOLDER.sub(_placeholder, report)
