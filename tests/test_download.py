@@ -250,6 +250,9 @@ class TestGenerateDownloadScript:
         assert "curl" in script
         assert "SRR001.fastq.gz" in script
         assert "abc123" in script
+        # aria2c must replace stale partials (not save <name>.1.gz) and show progress
+        assert "--allow-overwrite=true --auto-file-renaming=false" in script
+        assert not any(" -q " in line for line in script.splitlines() if "aria2c -x" in line)
 
     def test_skips_valid_files(self, run_dir: Path, tmp_path: Path):
         out = tmp_path / "output"

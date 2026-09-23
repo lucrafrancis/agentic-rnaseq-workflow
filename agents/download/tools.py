@@ -557,6 +557,9 @@ def generate_download_script(output_dir: str, runs: list[str] | None = None) -> 
 
     lines.append("")
 
+    # aria2c flags: --allow-overwrite/--auto-file-renaming=false make it replace a stale or
+    # partial file (e.g. from an interrupted run) instead of saving <name>.1.gz beside it,
+    # which would then fail the MD5 check. No -q, so its progress bar shows.
     for dl in downloads:
         lines.append(f'echo "Downloading {dl["filename"]} ..."')
         if has_aspera and dl.get("aspera"):
@@ -565,7 +568,8 @@ def generate_download_script(output_dir: str, runs: list[str] | None = None) -> 
                 f'  ascp -QT -l 300m -P33001 -i "$ASPERA_KEY" \\\n'
                 f'    {dl["aspera"]} ./',
                 'elif [ "$DL_METHOD" = "aria2c" ]; then',
-                f'  aria2c -x 4 -s 4 --retry-wait=5 -m 3 -q \\\n'
+                f'  aria2c -x 4 -s 4 --retry-wait=5 -m 3 --allow-overwrite=true --auto-file-renaming=false \\\n'
+                f'    --summary-interval=0 --console-log-level=warn --download-result=hide \\\n'
                 f'    -o "{dl["filename"]}" "{dl["url"]}"',
                 "else",
                 f'  curl -fSL --retry 3 --retry-delay 5 \\\n'
@@ -575,7 +579,8 @@ def generate_download_script(output_dir: str, runs: list[str] | None = None) -> 
         else:
             lines += [
                 'if [ "$DL_METHOD" = "aria2c" ]; then',
-                f'  aria2c -x 4 -s 4 --retry-wait=5 -m 3 -q \\\n'
+                f'  aria2c -x 4 -s 4 --retry-wait=5 -m 3 --allow-overwrite=true --auto-file-renaming=false \\\n'
+                f'    --summary-interval=0 --console-log-level=warn --download-result=hide \\\n'
                 f'    -o "{dl["filename"]}" "{dl["url"]}"',
                 "else",
                 f'  curl -fSL --retry 3 --retry-delay 5 \\\n'
