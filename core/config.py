@@ -39,6 +39,10 @@ class RunPaths:
         return RUNS_DIR / self.name
 
     @property
+    def state_file(self) -> Path:
+        return self.dir / "run_state.json"
+
+    @property
     def samplesheet(self) -> Path:
         return self.dir / "samplesheet.csv"
 

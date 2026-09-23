@@ -7,6 +7,7 @@ the module-level SESSION singleton rather than passing it as an argument.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -23,6 +24,7 @@ class Session:
         self.paths: RunPaths | None = None
         self.fastq_dir: Path | None = None
         self.stages_completed: list[str] = []
+        self.source_prompt: str | None = None  # where the prompt was read from, for relative paths
 
         # Analysis state — populated by Stage 3 tools
         self.counts_df: pd.DataFrame | None = None
@@ -34,7 +36,7 @@ class Session:
         self.results_dir: Path | None = None
         self.multiqc_stats: pd.DataFrame | None = None
 
-    def begin_run(self, project_name: str) -> None:
+    def begin_run(self, project_name: str, source_prompt: Path | None = None) -> None:
         """Create a new timestamped run directory and initialise paths."""
         datestamp = datetime.now().strftime("%Y%m%d")
         base = f"{datestamp}_{project_name}"
@@ -47,6 +49,8 @@ class Session:
             self.paths = RunPaths(self.name)
         self.paths.dir.mkdir(parents=True, exist_ok=True)
         self.stages_completed = []
+        self.source_prompt = str(source_prompt.resolve()) if source_prompt else None
+        self._save_state()
 
     def resume_run(self, run_dir: Path) -> None:
         """Attach to an existing run directory for resumption."""
@@ -58,11 +62,23 @@ class Session:
             raise ValueError(f"Run directory must be under {RUNS_DIR}, got: {run_dir}")
         self.name = run_dir.name
         self.paths = RunPaths(self.name)
-        self.stages_completed = []
+        state_file = self.paths.state_file
+        state = json.loads(state_file.read_text()) if state_file.is_file() else {}
+        self.stages_completed = state.get("stages_completed", [])
+        self.source_prompt = state.get("source_prompt")
 
     def mark_stage_complete(self, stage: str) -> None:
+        """Record a stage as done (approved/validated). Persisted so --resume can trust it."""
         if stage not in self.stages_completed:
             self.stages_completed.append(stage)
+            self._save_state()
+
+    def is_complete(self, stage: str) -> bool:
+        return stage in self.stages_completed
+
+    def _save_state(self) -> None:
+        state = {"stages_completed": self.stages_completed, "source_prompt": self.source_prompt}
+        self.require_paths().state_file.write_text(json.dumps(state, indent=2) + "\n")
 
     def require_paths(self) -> RunPaths:
         if self.paths is None:

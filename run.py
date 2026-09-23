@@ -1,7 +1,9 @@
 """Entrypoint:
   uv run python run.py <prompt.txt>           — full pipeline (stages 0-3)
   uv run python run.py --resume <run_dir>     — resume from an existing run directory
-  uv run python run.py --analyze <results>    — analysis only (stage 3)
+  uv run python run.py --analyze <run_dir>    — re-run analysis (stage 3) on an existing run
+  uv run python run.py --analyze <prompt.txt> — analysis only, from a count matrix in the prompt
+  --skip-download                             — skip stage 0 (FASTQs already local)
 
 Stages with human approval between them:
   0. Download agent — resolve accessions, download FASTQs (if needed)
@@ -9,11 +11,12 @@ Stages with human approval between them:
   2. Submission handler — builds nextflow command, submits pipeline
   3. Analysis agent — downstream DE, enrichment, and reporting
 
---resume skips stages whose artifacts already exist in the run directory.
+--resume skips stages recorded as complete (approved/validated) in run_state.json.
 """
 
 from __future__ import annotations
 
+import argparse
 import base64
 import json
 import re
@@ -26,86 +29,95 @@ from core.session import SESSION
 
 
 def main() -> None:
-    if len(sys.argv) == 3 and sys.argv[1] == "--analyze":
-        run_dir = Path(sys.argv[2])
-        if not run_dir.is_dir():
-            sys.exit(f"Not a directory: {run_dir}")
-        SESSION.resume_run(run_dir)
-        print(f"Resuming run for analysis: {run_dir}")
+    parser = argparse.ArgumentParser(
+        description="Agentic nf-core/rnaseq workflow.",
+        epilog=(
+            "examples:\n"
+            "  run.py prompt.txt                  full pipeline\n"
+            "  run.py prompt.txt --skip-download  FASTQs already local; ignore accessions\n"
+            "  run.py --resume runs/<run_dir>     continue an interrupted run\n"
+            "  run.py --analyze runs/<run_dir>    re-run analysis on an existing run\n"
+            "  run.py --analyze prompt.txt        analysis only, from a count matrix in the prompt"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("target", type=Path, help="prompt file, or a run directory with --resume/--analyze")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--resume", action="store_true", help="resume the run directory TARGET")
+    mode.add_argument("--analyze", action="store_true", help="analysis only (TARGET: run directory or prompt file)")
+    parser.add_argument("--skip-download", action="store_true", help="skip stage 0 even if the prompt has an accession")
+    args = parser.parse_args()
+    target: Path = args.target
 
-        prompt_file = run_dir / "prompt.txt"
+    if args.analyze and target.is_dir():
+        SESSION.resume_run(target)
+        print(f"Resuming run for analysis: {target}")
+        prompt_file = target / "prompt.txt"
         original_prompt = prompt_file.read_text().strip() if prompt_file.is_file() else ""
         if not original_prompt:
             print("Warning: no prompt.txt in run directory.")
-
-        results_dir = run_dir / "results"
-        if not results_dir.is_dir():
-            sys.exit(f"No results/ directory in {run_dir}. Nothing to analyse.")
-
-        _run_analysis(str(results_dir), original_prompt=original_prompt)
+        results_dir = target / "results"
+        _run_analysis(str(results_dir) if results_dir.is_dir() else None, original_prompt=original_prompt)
         return
 
-    if len(sys.argv) == 3 and sys.argv[1] == "--resume":
-        run_dir = Path(sys.argv[2])
-        if not run_dir.is_dir():
-            sys.exit(f"Not a directory: {run_dir}")
-        SESSION.resume_run(run_dir)
-        prompt_file = run_dir / "prompt.txt"
+    if args.resume:
+        if not target.is_dir():
+            sys.exit(f"Not a directory: {target}")
+        SESSION.resume_run(target)
+        prompt_file = target / "prompt.txt"
         if not prompt_file.is_file():
-            sys.exit(f"No prompt.txt in {run_dir}. Cannot resume.")
-        prompt = prompt_file.read_text().strip()
-        print(f"Resuming run: {run_dir}")
-        _run_pipeline(prompt)
+            sys.exit(f"No prompt.txt in {target}. Cannot resume.")
+        print(f"Resuming run: {target}")
+        _run_pipeline(prompt_file.read_text().strip(), skip_download=args.skip_download)
         return
 
-    if len(sys.argv) != 2:
-        sys.exit(
-            "usage: python run.py <prompt.txt>\n"
-            "       python run.py --resume <run_dir>\n"
-            "       python run.py --analyze <results_dir>"
-        )
-
-    prompt_file = Path(sys.argv[1])
-    if not prompt_file.is_file():
-        sys.exit(f"File not found: {prompt_file}")
-
-    prompt = prompt_file.read_text().strip()
+    if not target.is_file():
+        sys.exit(f"File not found: {target}")
+    prompt = target.read_text().strip()
     if not prompt:
         sys.exit("Prompt file is empty.")
 
-    project_name = prompt_file.resolve().parent.name.replace(" ", "_")
-    SESSION.begin_run(project_name)
-    shutil.copy2(prompt_file, SESSION.paths.dir / "prompt.txt")
+    project_name = target.resolve().parent.name.replace(" ", "_")
+    SESSION.begin_run(project_name, source_prompt=target)
+    shutil.copy2(target, SESSION.paths.dir / "prompt.txt")
     print(f"Run directory: {SESSION.paths.dir}")
-    _run_pipeline(prompt)
+
+    if args.analyze:
+        _run_analysis(None, original_prompt=prompt)
+    else:
+        _run_pipeline(prompt, skip_download=args.skip_download)
 
 
-def _run_pipeline(prompt: str) -> None:
-    """Run the full pipeline, skipping stages whose artifacts already exist."""
+def _run_pipeline(prompt: str, *, skip_download: bool = False) -> None:
+    """Run the full pipeline, skipping stages already recorded as complete."""
     paths = SESSION.require_paths()
 
     # --- Stage 0: data download (if accession present) ---
-    accession = _extract_accession(prompt)
-    if accession:
-        if paths.download_metadata.is_file():
-            print("Stage 0: download metadata exists, skipping download agent.")
-        else:
-            _download_stage(prompt)
+    if SESSION.is_complete("download"):
+        print("Stage 0: download already complete, skipping.")
+    elif skip_download:
+        print("Stage 0: skipped (--skip-download).")
+        SESSION.mark_stage_complete("download")
+    elif _extract_accession(prompt):
+        _download_stage(prompt)
 
     # --- Stage 1: samplesheet generation ---
     samplesheet = paths.samplesheet
-    if samplesheet.is_file():
-        print(f"Stage 1: samplesheet exists ({samplesheet}), skipping samplesheet agent.")
+    if SESSION.is_complete("samplesheet"):
+        print(f"Stage 1: samplesheet already approved ({samplesheet}), skipping.")
     else:
-        from agents.samplesheet.loop import run_samplesheet_agent
-        run_samplesheet_agent(prompt)
+        if samplesheet.is_file():
+            print(f"Stage 1: found unapproved samplesheet ({samplesheet}), presenting for approval.")
+        else:
+            from agents.samplesheet.loop import run_samplesheet_agent
+            run_samplesheet_agent(prompt)
 
-        if not samplesheet.is_file():
-            sys.exit("Samplesheet agent did not produce a sample sheet. Check the logs.")
+            if not samplesheet.is_file():
+                sys.exit("Samplesheet agent did not produce a sample sheet. Check the logs.")
 
-        report = paths.dir / "report.md"
-        if report.is_file():
-            print(f"\nReport: {report}")
+            report = paths.dir / "report.md"
+            if report.is_file():
+                print(f"\nReport: {report}")
 
         preview = samplesheet.read_text()
         result = present_for_approval(
@@ -123,7 +135,7 @@ def _run_pipeline(prompt: str) -> None:
             preview = samplesheet.read_text()
             print(f"Using edited sample sheet ({len(preview.strip().splitlines()) - 1} samples).")
 
-    SESSION.mark_stage_complete("samplesheet")
+        SESSION.mark_stage_complete("samplesheet")
 
     # --- Stage 2: submission configuration + pipeline run ---
     results_dir = paths.dir / "results"
@@ -166,20 +178,34 @@ def _extract_accession(prompt: str) -> str | None:
 
 
 def _download_stage(prompt: str) -> None:
-    """Stage 0: resolve accession and download FASTQs if needed."""
+    """Stage 0: resolve accession and download FASTQs if needed.
+
+    If a previous attempt got as far as choosing an output directory, the script is
+    regenerated directly from download_metadata.json (no LLM) — files already present
+    with a valid MD5 are skipped, so an interrupted download picks up where it left off.
+    """
     from agents.download.loop import run_download_agent
-    from agents.download.tools import execute_download, validate_downloads
+    from agents.download.tools import execute_download, generate_download_script, validate_downloads
 
     print("\n--- Stage 0: Data Download ---")
-    run_download_agent(prompt)
-
     paths = SESSION.require_paths()
+    previous = json.loads(paths.download_metadata.read_text()) if paths.download_metadata.is_file() else {}
+    paths.download_script.unlink(missing_ok=True)  # never approve a stale script
+
+    if previous.get("output_dir"):
+        print(f"Resuming download into {previous['output_dir']} (skipping files with valid MD5).")
+        result = generate_download_script(previous["output_dir"])
+        if "error" in result:
+            sys.exit(f"Could not regenerate download script: {result['message']}")
+    else:
+        run_download_agent(prompt)
 
     if not paths.download_metadata.is_file():
         sys.exit("Download agent failed to resolve the accession. Check the logs above.")
 
     if not paths.download_script.is_file():
         print("No downloads needed — files already present.")
+        SESSION.mark_stage_complete("download")
         return
 
     script_content = paths.download_script.read_text()
@@ -197,8 +223,8 @@ def _download_stage(prompt: str) -> None:
     )
 
     if not result.approved:
-        print(f"Download skipped: {result.reason or 'none given'}")
-        return
+        print(f"Download rejected. Reason: {result.reason or 'none given'}")
+        sys.exit("If the FASTQs are already local, re-run with --skip-download.")
 
     print("\nDownloading...")
     exec_result = execute_download(str(paths.download_script))
@@ -208,6 +234,7 @@ def _download_stage(prompt: str) -> None:
     output_dir = metadata.get("output_dir")
     if not output_dir:
         print("No output directory recorded in metadata. Skipping validation.")
+        SESSION.mark_stage_complete("download")
         return
 
     print("Validating checksums...")
@@ -310,9 +337,13 @@ def _submit_with_troubleshooting(samplesheet_path: str) -> dict:
     sys.exit(1)
 
 
-def _run_analysis(results_dir: str, *, original_prompt: str = "") -> None:
+def _run_analysis(results_dir: str | None, *, original_prompt: str = "") -> None:
     """Run the analysis agent. Uses the original prompt as base context;
-    optionally accepts extra instructions interactively (saved if provided)."""
+    optionally accepts extra instructions interactively (saved if provided).
+
+    results_dir is None for analysis-only runs, where the prompt points at the count
+    matrix (and optionally a design file) instead of nf-core outputs.
+    """
     paths = SESSION.require_paths()
 
     # Fall back to prompt.txt in the run directory if not passed explicitly
@@ -322,7 +353,7 @@ def _run_analysis(results_dir: str, *, original_prompt: str = "") -> None:
             original_prompt = prompt_file.read_text().strip()
 
     print("\n" + "=" * 60)
-    print("  Pipeline completed. Ready for downstream analysis.")
+    print("  Ready for downstream analysis." if results_dir is None else "  Pipeline completed. Ready for downstream analysis.")
     print("=" * 60)
 
     # Extra instructions (optional)
@@ -358,7 +389,15 @@ def _run_analysis(results_dir: str, *, original_prompt: str = "") -> None:
         context_parts.append(original_prompt)
     if analysis_input:
         context_parts.append(f"\nAdditional instructions: {analysis_input}")
-    context_parts.append(f"\nThe nf-core/rnaseq results are at: {results_dir}")
+    if results_dir:
+        context_parts.append(f"\nThe nf-core/rnaseq results are at: {results_dir}")
+    else:
+        context_parts.append("\nNo nf-core results for this run — use the count matrix described above.")
+    if SESSION.source_prompt:
+        context_parts.append(
+            f"The prompt was read from {SESSION.source_prompt}; relative paths in it may be "
+            f"relative to that file's directory or to the current directory ({Path.cwd()})."
+        )
     if paths.design.is_file():
         context_parts.append(f"A design CSV is available at: {paths.design}")
 

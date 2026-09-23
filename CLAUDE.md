@@ -6,7 +6,7 @@ Raw Anthropic API agent loop (no frameworks) that builds nf-core/rnaseq sample s
 
 Four stages, with human approval **between** stages (not inside the agent loop):
 
-0. **Download agent** (`agents/download/`) — resolves GEO/SRA accessions via NCBI/ENA APIs, generates a download script (aspera > aria2c > curl), validates MD5 checksums. Only runs when the prompt contains an accession but no FASTQ path.
+0. **Download agent** (`agents/download/`) — resolves GEO/SRA accessions via NCBI/ENA APIs, generates a download script (aspera > aria2c > curl), validates MD5 checksums. Runs whenever the prompt contains an accession (it checks existing files by MD5 and only downloads what's missing); `--skip-download` bypasses it. Rejecting the download script exits.
 1. **Samplesheet agent** (`agents/samplesheet/`) — scans FASTQs, reads metadata, matches pairs, drafts/validates/saves a sample sheet, writes a report. Fully implemented and tested with real GEO data.
 2. **Submission agent** (`agents/submission/`) — reads the prompt and configures nextflow params (genome, skip_alignment, etc.) via an open-ended tool. Has a `run_command` tool to check system resources (RAM, CPUs) before configuring — always sets resource limits based on the actual machine. Writes `run_nextflow.sh` + `nf_params.yml` + `custom.config`. Pipeline params go in the YAML; resource limits (`max_memory`, `max_cpus`, `max_time`) go in `custom.config` as nextflow `resourceLimits` to avoid nf-schema validation warnings. Human approves the script before execution.
 3. **Analysis agent** (`agents/analysis/`) — downstream DE, enrichment, QC, and reporting on nf-core/rnaseq outputs. Python-only (PyDESeq2, gseapy, numpy PCA). Optionally accepts a paper PDF as context via Claude's native base64 content blocks. Fetches GEO metadata and PubMed abstracts for context/citations. Fully implemented and tested.
@@ -17,13 +17,15 @@ The full flow in `run.py`: download agent (if needed) → human approves downloa
 
 ```bash
 uv run python run.py <prompt.txt>                # full pipeline (stages 0-3)
+uv run python run.py <prompt.txt> --skip-download  # FASTQs already local
 uv run python run.py --resume <run_dir>          # resume from existing run directory
-uv run python run.py --analyze <run_dir>         # analysis only (stage 3)
+uv run python run.py --analyze <run_dir>         # re-run analysis (stage 3) on an existing run
+uv run python run.py --analyze <prompt.txt>      # analysis only, count matrix described in prompt
 ```
 
-`--resume` skips stages whose artifacts already exist: `download_metadata.json` → skip download, `samplesheet.csv` → skip samplesheet agent, `params.json` → skip submission agent, `results/` non-empty → skip nextflow, go straight to analysis.
+Completed stages are recorded in `run_state.json` (only after approval/validation), along with the source prompt path. `--resume` trusts that file, not artifact existence: download done → skip; interrupted download (metadata has `output_dir`) → script regenerated without the LLM, skipping files with valid MD5; samplesheet approved → skip, but an unapproved `samplesheet.csv` is re-presented for approval without re-running the agent; `params.json` → skip submission agent (the script is still re-approved); `salmon.merged.gene_counts.tsv` in `results/` → skip nextflow.
 
-`--analyze` attaches to an existing run directory (via `resume_run`), reads the original `prompt.txt` as context, and runs the analysis agent. Output goes into the same run dir (`analysis/`), not a new one. An optional interactive prompt lets the user add extra instructions (saved as `analysis_prompt.txt` if provided); Enter continues without them, "skip" aborts.
+`--analyze <run_dir>` attaches to an existing run directory (via `resume_run`), reads the original `prompt.txt` as context, and runs the analysis agent (with or without `results/`). Output goes into the same run dir (`analysis/`), not a new one. `--analyze <prompt.txt>` creates a new run for a user-provided count matrix, skipping stages 0-2. Each analysis writes `analysis/replay.py`, which re-runs the successful tool calls without the LLM (`python -m agents.analysis.replay <run_dir>` for older runs). An optional interactive prompt lets the user add extra instructions (saved as `analysis_prompt.txt` if provided); Enter continues without them, "skip" aborts.
 
 The prompt file describes the data (FASTQ location, organism, metadata path, strandedness). See `examples/` for working prompts. Run directories are named `runs/<datestamp>_<project>/` (derived from prompt file's parent directory).
 
