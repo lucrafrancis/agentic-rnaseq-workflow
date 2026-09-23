@@ -37,7 +37,7 @@ The prompt file describes the data (FASTQ location, organism, metadata path, str
 - Human approval belongs between stages, never inside the agent loop
 - Keep code minimal — no bloat, no premature abstractions
 - Tests are offline (no API calls)
-- Tools must enforce correctness, not the LLM — paths are resolved to absolute in the tools themselves (`scan_fastqs`, `draft_samplesheet`), `save_samplesheet` always writes to the canonical run directory location, `SubmissionParams` routes resource limits to `custom.config` vs pipeline params to `nf_params.yml` automatically, `configure_submission` forces `pseudo_aligner: salmon` when `skip_alignment` is set (so counts are always produced), and `generate_report` returns actual figure paths and appends disclaimers rather than trusting the LLM to get filenames or caveats right. The LLM is a lossy intermediary; don't trust it to preserve values faithfully between tool calls.
+- Tools must enforce correctness, not the LLM — paths are resolved to absolute in the tools themselves (`scan_fastqs`, `draft_samplesheet`), `save_samplesheet` always writes to the canonical run directory location, `SubmissionParams` routes resource limits to `custom.config` vs pipeline params to `nf_params.yml` automatically, `configure_submission` forces `pseudo_aligner: salmon` when `skip_alignment` is set (so counts are always produced), and `generate_figures`/`write_report` supply real figure paths and captions and append the disclaimer rather than trusting the LLM to get filenames or caveats right. Tools may make lossless mechanical corrections to LLM output, and reject anything else with a reason — never silently delete what the LLM wrote. The LLM is a lossy intermediary; don't trust it to preserve values faithfully between tool calls.
 
 ## Prerequisites
 
@@ -53,7 +53,7 @@ Agent loops and the troubleshooter use automatic prompt caching (top-level `cach
 
 ## Analysis agent tools
 
-`fetch_geo_metadata` → `fetch_abstract` → `scan_results` → `load_counts` → `inspect_counts` → `set_design` (if needed) → `compute_qc` → `filter_low_counts` → `run_deseq2` → `get_top_genes` → `run_enrichment` → `summarize_findings` → `generate_report`
+`fetch_geo_metadata` → `fetch_abstract` → `scan_results` → `load_counts` → `inspect_counts` → `set_design` (if needed) → `compute_qc` → `filter_low_counts` → `run_deseq2` → `get_top_genes` → `run_enrichment` → `summarize_findings` → `generate_figures` → `write_report`
 
 - `fetch_geo_metadata` / `fetch_abstract` — NCBI E-utilities for GEO series metadata and PubMed abstracts. Provides cell type, organism, experimental context, and citable references. Called first when a GEO accession is in the prompt.
 - `inspect_counts` — detects whether data is raw counts vs normalised (TPM/FPKM/log). Prevents running DESeq2 on pre-normalised data. Also flags Salmon fractional counts (`salmon_fractional: true`) so downstream tools know rounding is safe.
@@ -61,7 +61,8 @@ Agent loops and the troubleshooter use automatic prompt caching (top-level `cach
 - `save_design` (samplesheet agent) writes `design.csv` for traceability; `set_design` (analysis agent) is the fallback when none exists
 - `run_enrichment` takes a `label` param (e.g. "upregulated", "downregulated") — results accumulate across calls, each label gets its own figures
 - `summarize_findings` returns `software_versions` (real installed versions), `pipeline_versions` (parsed from nf-core's `nf_core_rnaseq_software_mqc_versions.yml` — exact Nextflow, pipeline, and Salmon versions), and `data_source` ("nf-core" or "user-provided") to prevent hallucination in the Methods section
-- `generate_report` returns a `figures` dict with actual file paths — the LLM must use only those, not invent filenames. Appends a hallucination disclaimer automatically (including a gene annotation verification caveat). Strips trailing `---` before appending to prevent doubling.
+- `generate_figures` draws every figure before the report is written and returns each path with a factual caption (e.g. heatmap = top 25 up + 25 down by padj), so the LLM describes real figures. `pca_color_by` lets the agent choose extra PCA colourings from informative design columns only (identifier/constant columns are excluded). `write_report` fixes image links losslessly (missing `figures/` prefix), rejects links to figures that don't exist (nothing written), inserts a code-generated caption with the file path under each figure, and appends the standard disclaimer (an LLM-written disclaimer is left in place). `generate_report` remains only as a back-compat wrapper for old replay scripts.
+- `summarize_findings` returns `data_source` ("nf-core/rnaseq", "GEO count matrix" or "user-provided") and `data_provenance` from files on disk (quantification method, or GEO file/source/value type/MD5), plus the filtering settings and enrichment inputs actually used, so Methods are based on facts.
 - Enrichment uses gseapy/Enrichr (network call) — mocked in tests
 - PCA via numpy SVD on log2(counts+1), no scanpy dependency
 

@@ -15,6 +15,7 @@ from __future__ import annotations
 import urllib.request
 import urllib.error
 import json as _json
+import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,8 @@ import pandas as pd
 from core.session import SESSION
 
 Summary = dict[str, Any]
+
+_HEATMAP_PER_DIRECTION = 25
 
 _QUANTILES = {"min": 0.0, "p25": 0.25, "median": 0.5, "p75": 0.75, "p95": 0.95, "max": 1.0}
 
@@ -333,6 +336,7 @@ def load_counts(counts_path: str, design_path: str | None = None) -> Summary:
     counts = counts.set_index(gene_ids)
 
     SESSION.counts_df = counts
+    SESSION.counts_path = path.resolve()
     SESSION.gene_names = gene_names.set_axis(gene_ids) if gene_names is not None else None
 
     # Load TPM if available (nf-core convention: same directory)
@@ -555,13 +559,13 @@ def filter_low_counts(min_count: int = 10, min_samples: int = 2) -> Summary:
     SESSION.counts_df = counts.loc[keep]
     after = int(SESSION.counts_df.shape[0])
 
-    return {
+    SESSION.filter_settings = {
         "min_count": min_count,
         "min_samples": min_samples,
         "genes_before": before,
         "genes_after": after,
-        "genes_removed": before - after,
     }
+    return {**SESSION.filter_settings, "genes_removed": before - after}
 
 
 def run_deseq2(contrast: list[str], covariates: list[str] | None = None) -> Summary:
@@ -779,6 +783,7 @@ def run_enrichment(gene_list: list[str], organism: str = "human", label: str = "
     SESSION.enrichment_results[label_key] = {
         "organism": organism,
         "gene_sets": gene_sets,
+        "n_input_genes": len(gene_list),
         "results": enrichment,
     }
 
@@ -791,6 +796,33 @@ def run_enrichment(gene_list: list[str], organism: str = "human", label: str = "
     }
 
 
+def _data_provenance() -> tuple[str, dict[str, Any]]:
+    """Where the loaded counts came from, from files on disk — never from the LLM."""
+    counts_path = SESSION.counts_path
+    paths = SESSION.paths
+
+    for subdir, method in (("star_salmon", "STAR alignment + Salmon quantification"),
+                           ("salmon", "Salmon pseudo-alignment (alignment skipped)")):
+        quant = (SESSION.results_dir / subdir) if SESSION.results_dir else None
+        if quant and counts_path and quant.resolve() in counts_path.parents:
+            return "nf-core/rnaseq", {"quantification": method, "counts_file": str(counts_path)}
+
+    if counts_path and paths and paths.counts_metadata.is_file() and counts_path == paths.counts_matrix.resolve():
+        meta = _json.loads(paths.counts_metadata.read_text())
+        return "GEO count matrix", {
+            "accession": meta["accession"],
+            "source": "authors' supplementary file" if meta["source"] == "author"
+                      else "NCBI-generated counts",
+            "file": meta["filename"],
+            "md5": meta["md5"],
+            "value_type": meta["value_type"],
+            "gene_id_type": meta["gene_id_type"],
+            "n_duplicate_gene_ids_summed": meta["n_duplicates_summed"],
+        }
+
+    return "user-provided", {"counts_file": str(counts_path) if counts_path else None}
+
+
 def summarize_findings() -> Summary:
     """Consolidate the final analysis state into one factual summary for the report.
 
@@ -798,11 +830,9 @@ def summarize_findings() -> Summary:
     agent has the facts it needs to write an accurate report.
     """
     out: Summary = {}
-
-    # Data source (from scan_results)
-    out["data_source"] = "nf-core" if (
-        SESSION.results_dir and (SESSION.results_dir / "star_salmon").is_dir()
-    ) else "user-provided"
+    out["data_source"], out["data_provenance"] = _data_provenance()
+    if SESSION.filter_settings:
+        out["filtering"] = SESSION.filter_settings
 
     if SESSION.counts_df is not None:
         out["n_genes"] = int(SESSION.counts_df.shape[0])
@@ -824,6 +854,11 @@ def summarize_findings() -> Summary:
         }
 
     if SESSION.enrichment_results:
+        out["enrichment_inputs"] = {
+            label: {"n_input_genes": e.get("n_input_genes"), "gene_sets": e.get("gene_sets"),
+                    "organism": e.get("organism")}
+            for label, e in SESSION.enrichment_results.items()
+        }
         top_terms = {}
         for label, entry in SESSION.enrichment_results.items():
             results = entry.get("results", {})
@@ -863,12 +898,19 @@ def summarize_findings() -> Summary:
     return out
 
 
-def generate_report(report_markdown: str) -> Summary:
-    """Generate all analysis figures and write the report.
+def _informative_columns() -> list[str]:
+    """Design columns other than condition that can carry information in a plot: more
+    than one value, and not unique per sample (identifiers such as gsm or title)."""
+    if SESSION.design_df is None or SESSION.counts_df is None:
+        return []
+    design = SESSION.design_df.loc[[s for s in SESSION.counts_df.columns if s in SESSION.design_df.index]]
+    return [c for c in design.columns if c != "condition" and 1 < design[c].nunique() < len(design)]
 
-    The agent supplies the full report as Markdown with inline figure references
-    (e.g. ![PCA](figures/pca.png)). This tool generates the figures at known paths
-    and writes the report as-is.
+
+def _draw_figures(pca_color_by: list[str]) -> list[dict]:
+    """Draw every figure the current analysis state supports.
+
+    Returns [{"path": "figures/<name>.png", "caption": <facts about the figure>}].
     """
     import matplotlib
     matplotlib.use("Agg")
@@ -878,7 +920,7 @@ def generate_report(report_markdown: str) -> Summary:
 
     paths = SESSION.require_paths()
     paths.analysis_figures.mkdir(parents=True, exist_ok=True)
-    figures: list[Path] = []
+    figures: list[dict] = []
 
     # --- Consistent style + palette ---
     _PALETTE = ["#4C72B0", "#DD8452", "#55A868", "#C44E52", "#8172B3",
@@ -893,11 +935,10 @@ def generate_report(report_markdown: str) -> Summary:
         if title:
             ax.set_title(title, fontsize=13, fontweight="bold", pad=10)
 
-    def _save(fig, name):
-        p = paths.analysis_figures / name
-        fig.savefig(p, dpi=150, bbox_inches="tight", facecolor="white")
+    def _save(fig, name, caption):
+        fig.savefig(paths.analysis_figures / name, dpi=150, bbox_inches="tight", facecolor="white")
         plt.close(fig)
-        figures.append(p)
+        figures.append({"path": f"figures/{name}", "caption": caption})
 
     def _condition_colors(conditions_series):
         unique = list(dict.fromkeys(conditions_series))
@@ -937,7 +978,9 @@ def generate_report(report_markdown: str) -> Summary:
             for cond, color in cmap.items():
                 ax.bar([], [], color=color, label=cond)
             ax.legend(fontsize=9, frameon=False)
-        _save(fig, "library_sizes.png")
+        _save(fig, "library_sizes.png",
+              f"Total counts per sample ({len(samples)} samples, "
+              f"{min(lib_sizes) / 1e6:.1f}–{max(lib_sizes) / 1e6:.1f} million), coloured by condition.")
 
     # --- PCA by condition ---
     if pca_data is not None:
@@ -963,12 +1006,14 @@ def generate_report(report_markdown: str) -> Summary:
         ax.set_xlabel(f"PC1 ({var_exp[0]:.1%} variance)", fontsize=11)
         ax.set_ylabel(f"PC2 ({var_exp[1]:.1%} variance)" if pca_data["n_pcs"] > 1 else "PC2", fontsize=11)
         _style_ax(ax, "PCA — log2(counts + 1)")
-        _save(fig, "pca.png")
+        _save(fig, "pca.png",
+              f"PCA of log2(counts + 1): PC1 {var_exp[0]:.1%}"
+              + (f", PC2 {var_exp[1]:.1%}" if pca_data["n_pcs"] > 1 else "")
+              + " of variance, coloured by condition.")
 
     # --- PCA coloured by other metadata variables ---
     if pca_data is not None and SESSION.design_df is not None:
-        extra_cols = [c for c in SESSION.design_df.columns if c != "condition"]
-        for col in extra_cols:
+        for col in pca_color_by:
             vals = SESSION.design_df.loc[samples, col]
             fig, ax = plt.subplots(figsize=(7, 6))
 
@@ -992,11 +1037,12 @@ def generate_report(report_markdown: str) -> Summary:
             ax.set_xlabel(f"PC1 ({var_exp[0]:.1%} variance)", fontsize=11)
             ax.set_ylabel(f"PC2 ({var_exp[1]:.1%} variance)", fontsize=11)
             _style_ax(ax, f"PCA coloured by {col}")
-            _save(fig, f"pca_{col.lower().replace(' ', '_')}.png")
+            _save(fig, f"pca_{col.lower().replace(' ', '_')}.png",
+                  f"PCA of log2(counts + 1) coloured by {col} ({vals.nunique()} values).")
 
     # --- PC–metadata association heatmap ---
     if pca_data is not None and SESSION.design_df is not None:
-        design_cols = list(SESSION.design_df.columns)
+        design_cols = ["condition", *_informative_columns()]
         n_pcs_show = min(pca_data["n_pcs"], 10)
         if design_cols and n_pcs_show >= 2:
             from scipy import stats as sp_stats
@@ -1034,7 +1080,9 @@ def generate_report(report_markdown: str) -> Summary:
             _style_ax(ax, "PC–metadata associations")
             ax.spines["left"].set_visible(False)
             ax.spines["bottom"].set_visible(False)
-            _save(fig, "pc_association.png")
+            _save(fig, "pc_association.png",
+                  f"Association (R²) between the first {n_pcs_show} principal components and "
+                  f"design variables: {', '.join(design_cols)}.")
 
     # --- Sample correlation heatmap ---
     if SESSION.counts_df is not None:
@@ -1059,7 +1107,9 @@ def generate_report(report_markdown: str) -> Summary:
         _style_ax(ax, "Sample correlation — log2(counts + 1)")
         ax.spines["left"].set_visible(False)
         ax.spines["bottom"].set_visible(False)
-        _save(fig, "sample_correlation.png")
+        _save(fig, "sample_correlation.png",
+              f"Pearson correlation of log2(counts + 1) between all {n} samples "
+              f"(range {corr.values.min():.2f}–1.00).")
 
     # --- Volcano plot ---
     if SESSION.deseq_results is not None:
@@ -1078,7 +1128,11 @@ def generate_report(report_markdown: str) -> Summary:
         ax.set_ylabel("-log10(padj)", fontsize=11)
         ax.legend(fontsize=9, frameon=False)
         _style_ax(ax, "Volcano plot")
-        _save(fig, "volcano.png")
+        n_sig = int(sig_mask.sum())
+        n_up = int((results.loc[sig_mask, "log2FoldChange"] > 0).sum())
+        de_facts = (f"{len(results)} genes tested; {n_sig} with padj < 0.05 "
+                    f"({n_up} up, {n_sig - n_up} down; design {SESSION.deseq_design}).")
+        _save(fig, "volcano.png", f"Volcano plot: {de_facts}")
 
         # --- MA plot ---
         fig, ax = plt.subplots(figsize=(7, 6))
@@ -1093,15 +1147,17 @@ def generate_report(report_markdown: str) -> Summary:
         ax.set_ylabel("log2 Fold Change", fontsize=11)
         ax.legend(fontsize=9, frameon=False)
         _style_ax(ax, "MA plot")
-        _save(fig, "ma_plot.png")
+        _save(fig, "ma_plot.png", f"MA plot: {de_facts}")
 
     # --- Top DE genes heatmap ---
     if SESSION.deseq_results is not None and SESSION.counts_df is not None:
         sig = SESSION.deseq_results.dropna(subset=["padj"])
         sig = sig[sig["padj"] < 0.05]
         if len(sig) > 0:
-            n_top = min(40, len(sig))
-            top_genes = sig.nsmallest(n_top, "padj").index
+            up = sig[sig["log2FoldChange"] > 0].nsmallest(_HEATMAP_PER_DIRECTION, "padj").index
+            down = sig[sig["log2FoldChange"] < 0].nsmallest(_HEATMAP_PER_DIRECTION, "padj").index
+            top_genes = list(up) + list(down)
+            n_top = len(top_genes)
             counts_top = SESSION.counts_df.loc[top_genes]
             log_vals = np.log2(counts_top.values.astype(float) + 1)
             row_means = log_vals.mean(axis=1, keepdims=True)
@@ -1123,11 +1179,16 @@ def generate_report(report_markdown: str) -> Summary:
             ax.set_xticklabels(heatmap_samples, rotation=45, ha="right", fontsize=9)
             ax.set_yticks(range(n_top))
             ax.set_yticklabels(gene_labels, fontsize=7)
+            if len(up) and len(down):
+                ax.axhline(len(up) - 0.5, color="black", linewidth=1)
             plt.colorbar(im, ax=ax, label="z-score", shrink=0.6)
-            _style_ax(ax, f"Top {n_top} DE genes (z-scored)")
+            _style_ax(ax, f"Top {len(up)} up / {len(down)} down DE genes (z-scored)")
             ax.spines["left"].set_visible(False)
             ax.spines["bottom"].set_visible(False)
-            _save(fig, "de_heatmap.png")
+            _save(fig, "de_heatmap.png",
+                  f"Top {len(up)} up-regulated (above the line) and {len(down)} down-regulated "
+                  f"genes with padj < 0.05, each ranked by padj; z-scored log2(counts + 1) "
+                  f"across {len(heatmap_samples)} samples.")
 
     # --- Enrichment bar plots (one per label × gene set) ---
     if SESSION.enrichment_results:
@@ -1152,34 +1213,98 @@ def generate_report(report_markdown: str) -> Summary:
                     fig_name = f"enrichment_{label}_{gs.lower().replace(' ', '_')}.png"
                 else:
                     fig_name = f"enrichment_{gs.lower().replace(' ', '_')}.png"
-                _save(fig, fig_name)
+                n_in = entry.get("n_input_genes")
+                _save(fig, fig_name,
+                      f"Enrichr {gs}, {title_label or 'input'} genes"
+                      + (f" ({n_in} input genes)" if n_in else "")
+                      + f": top {len(top)} terms by adjusted p-value.")
             palette_idx += 1
 
-    # --- Build figure map for the agent ---
-    figure_map = {p.stem: f"figures/{p.name}" for p in figures}
+    return figures
 
-    # --- Append disclaimer (tool-enforced, not LLM-dependent) ---
-    disclaimer = (
-        "\n\n---\n\n"
-        "**Disclaimer:** This report was generated by an AI system. "
-        "Large language models can produce inaccurate statements (hallucinations). "
-        "All biological claims, gene annotations, pathway interpretations, and "
-        "cited references should be independently verified before use in "
-        "publications or clinical decisions. "
-        "Biological roles listed alongside gene names are AI-generated summaries "
-        "and must be verified against primary databases (UniProt, NCBI Gene)."
-    )
-    # Strip trailing horizontal rules to avoid doubling
-    cleaned = report_markdown.rstrip()
-    while cleaned.endswith("---"):
-        cleaned = cleaned[:-3].rstrip()
-    report_text = cleaned + disclaimer + "\n"
 
-    # --- Write report ---
-    paths.analysis_report.write_text(report_text)
+_IMAGE_LINK = re.compile(r"!\[([^\]]*)\]\(([^)\s]+)\)")
+_DISCLAIMER = (
+    "\n\n---\n\n"
+    "**Disclaimer:** This report was generated by an AI system. "
+    "Large language models can produce inaccurate statements (hallucinations). "
+    "All biological claims, gene annotations, pathway interpretations, and "
+    "cited references should be independently verified before use in "
+    "publications or clinical decisions. "
+    "Biological roles listed alongside gene names are AI-generated summaries "
+    "and must be verified against primary databases (UniProt, NCBI Gene)."
+)
 
+
+def generate_figures(pca_color_by: list[str] | None = None) -> Summary:
+    """Draw all figures for the current analysis state and return their paths and
+    factual captions. Call before writing the report so it describes real figures.
+
+    pca_color_by: design columns to draw extra PCA plots for. Defaults to every
+    informative column (identifier and constant columns are never plotted).
+    """
+    if SESSION.counts_df is None:
+        return {"error": "counts_not_loaded", "message": "Call load_counts before generate_figures."}
+    informative = _informative_columns()
+    if pca_color_by is None:
+        pca_color_by = informative
+    bad = [c for c in pca_color_by if c not in informative]
+    if bad:
+        return {"error": "bad_pca_columns", "message": (
+            f"Cannot colour PCA by {bad}: not a design column, or constant / unique per sample "
+            f"(identifiers). Options: {informative}")}
+
+    SESSION.figures = _draw_figures(pca_color_by)
+    return {
+        "figures": {f["path"]: f["caption"] for f in SESSION.figures},
+        "pca_color_options": informative,
+        "note": "Reference figures only by these paths. write_report adds each figure's "
+                "path and caption beneath it automatically.",
+    }
+
+
+def write_report(report_markdown: str) -> Summary:
+    """Write the report. Image links must point at figures from generate_figures.
+
+    Lossless fixes only: a link whose file name matches a generated figure is
+    rewritten to its figures/ path. Links to figures that don't exist are rejected
+    (nothing written). Under each figure a caption with its file path and facts is
+    inserted, and the standard disclaimer is appended.
+    """
+    if SESSION.figures is None:
+        return {"error": "no_figures", "message": "Call generate_figures before write_report."}
+    by_name = {Path(f["path"]).name: f for f in SESSION.figures}
+
+    unknown = [m.group(2) for m in _IMAGE_LINK.finditer(report_markdown) if Path(m.group(2)).name not in by_name]
+    if unknown:
+        return {"error": "unknown_figures", "message": (
+            f"The report links figures that were not generated: {unknown}. Use only: "
+            f"{sorted(f['path'] for f in SESSION.figures)}. Nothing was written.")}
+
+    referenced: list[str] = []
+
+    def _link_with_caption(m: re.Match) -> str:
+        fig = by_name[Path(m.group(2)).name]
+        referenced.append(fig["path"])
+        return f"![{m.group(1)}]({fig['path']})\n\n*File: `{fig['path']}` — {fig['caption']}*"
+
+    report = _IMAGE_LINK.sub(_link_with_caption, report_markdown)
+
+    # Strip trailing horizontal rules to avoid doubling before the disclaimer
+    report = report.rstrip()
+    while report.endswith("---"):
+        report = report[:-3].rstrip()
+
+    paths = SESSION.require_paths()
+    paths.analysis_report.write_text(report + _DISCLAIMER + "\n")
     return {
         "report_path": str(paths.analysis_report),
-        "figures": figure_map,
-        "n_figures": len(figures),
+        "figures_referenced": len(referenced),
+        "unreferenced_figures": [f["path"] for f in SESSION.figures if f["path"] not in referenced],
     }
+
+
+def generate_report(report_markdown: str) -> Summary:
+    """Back-compat for replay scripts from older runs: figures + report in one call."""
+    result = generate_figures()
+    return result if "error" in result else write_report(report_markdown)

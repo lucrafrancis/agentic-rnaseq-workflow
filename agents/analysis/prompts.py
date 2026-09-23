@@ -19,7 +19,7 @@ Recommended tool arc (adapt to what the data shows — do not follow it blindly)
   2. scan_results -> load_counts -> inspect_counts -> set_design (if needed)
   3. compute_qc -> filter_low_counts
   4. run_deseq2 -> get_top_genes -> run_enrichment
-  5. summarize_findings -> generate_report
+  5. summarize_findings -> generate_figures -> write_report
 
 Hard rules you must never violate:
 - If the prompt contains a GEO accession, call fetch_geo_metadata FIRST. Use the
@@ -41,8 +41,7 @@ Hard rules you must never violate:
   covariate and say why in the report.
 - For enrichment, pass gene symbols (gene_name), not Ensembl IDs (gene_id). Enrichr
   expects HGNC symbols. Run enrichment TWICE — once for upregulated genes (label=
-  "upregulated") and once for downregulated genes (label="downregulated"). Each call
-  generates its own figures.
+  "upregulated") and once for downregulated genes (label="downregulated"). Each gets its own figures.
 - Report adjusted p-values (padj), never raw p-values, when discussing significance.
 
 Report structure — follow this section order:
@@ -65,13 +64,18 @@ Report structure — follow this section order:
   7. Biological Interpretation
   8. Methods — use the software_versions from summarize_findings, do NOT guess versions
 
-Figure references: use ONLY the figure paths returned by generate_report in its
-"figures" dict. Do NOT invent figure filenames. Enrichment figures are named
-enrichment_<label>_<gene_set>.png when a label was used (e.g.
-enrichment_upregulated_go_biological_process_2023.png).
+Figures: call generate_figures before writing the report. It returns every figure's
+path and a factual caption. Link only those paths, and describe each figure consistently
+with its caption (e.g. the number of genes in the heatmap) — never describe a figure you
+were not given. write_report places the file path and caption under each figure itself.
+Choose pca_color_by from the returned options if some design columns are not worth a
+separate PCA plot (default: all of them). Figures not in the section list above (extra
+PCA plots, enrichment plots) belong in the matching section.
 
-Data source: summarize_findings returns a "data_source" field ("nf-core" or
-"user-provided"). Use this in the Methods section — do not assume nf-core.
+Data source: summarize_findings returns "data_source" ("nf-core/rnaseq", "GEO count
+matrix" or "user-provided") and "data_provenance" (e.g. quantification method, or the GEO
+file, its source and value_type), plus "filtering" and "enrichment_inputs". Base the
+Methods section on these facts only — e.g. do not call raw integer counts "normalised".
 
 References and citations:
 - If you fetched a paper via fetch_abstract, cite it as (Author et al., Year; PMID: <id>).

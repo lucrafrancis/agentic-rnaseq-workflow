@@ -16,6 +16,7 @@ from agents.analysis.tools import (
     fetch_abstract,
     fetch_geo_metadata,
     filter_low_counts,
+    generate_figures,
     generate_report,
     get_top_genes,
     inspect_counts,
@@ -25,6 +26,7 @@ from agents.analysis.tools import (
     scan_results,
     set_design,
     summarize_findings,
+    write_report,
 )
 from core.session import SESSION
 
@@ -400,53 +402,148 @@ class TestSummarizeFindings:
         assert "pandas" in result["software_versions"]
 
 
-class TestGenerateReport:
-    def test_writes_report(self, count_matrix_tsv: Path, design_csv: Path):
-        SESSION.begin_run("test")
-        load_counts(str(count_matrix_tsv), design_path=str(design_csv))
-        filter_low_counts(min_count=1, min_samples=1)
-        run_deseq2(["condition", "KO", "WT"])
-        result = generate_report("# Test Report\n\nThis is a test.\n\n![PCA](figures/pca.png)")
-        assert "error" not in result
+def _strong_de_dataset(tmp_path: Path, n_up: int = 40, n_down: int = 30) -> tuple[Path, Path]:
+    """3 vs 3 counts with many clearly up/down genes, plus identifier and covariate columns."""
+    import numpy as np
+    import pandas as pd
+    rng = np.random.default_rng(1)
+    n_genes = 300
+    base = rng.integers(200, 2000, size=n_genes).astype(float)
+    fold = np.ones(n_genes)
+    fold[:n_up] = 8.0
+    fold[n_up:n_up + n_down] = 0.125
+    samples = ["WT_1", "WT_2", "WT_3", "KO_1", "KO_2", "KO_3"]
+    data = {s: rng.poisson(base * (fold if s.startswith("KO") else 1)) for s in samples}
+    counts = pd.DataFrame(data, index=[f"G{i:03d}" for i in range(n_genes)])
+    counts.insert(0, "gene_name", [f"Gene{i}" for i in range(n_genes)])
+    counts_path = tmp_path / "counts.tsv"
+    counts.rename_axis("gene_id").to_csv(counts_path, sep="\t")
+    design_path = tmp_path / "design.csv"
+    pd.DataFrame({
+        "sample": samples, "condition": ["WT"] * 3 + ["KO"] * 3,
+        "gsm": [f"GSM{i}" for i in range(6)], "title": samples,
+        "batch": ["a", "b", "c", "a", "b", "c"], "cell_line": ["X"] * 6,
+    }).to_csv(design_path, index=False)
+    return counts_path, design_path
+
+
+def _analysed(tmp_path: Path, **kwargs):
+    SESSION.begin_run("test")
+    counts, design = _strong_de_dataset(tmp_path, **kwargs)
+    load_counts(str(counts), design_path=str(design))
+    filter_low_counts(min_count=10, min_samples=2)
+    run_deseq2(["condition", "KO", "WT"])
+
+
+class TestGenerateFigures:
+    def test_requires_counts(self):
+        assert generate_figures()["error"] == "counts_not_loaded"
+
+    def test_figures_have_paths_and_captions(self, tmp_path: Path):
+        _analysed(tmp_path)
+        figs = generate_figures()["figures"]
+        for name in ("library_sizes", "pca", "sample_correlation", "pc_association", "volcano", "ma_plot", "de_heatmap"):
+            assert f"figures/{name}.png" in figs
+        assert all(caption for caption in figs.values())
+        assert all((SESSION.paths.analysis_dir / p).is_file() for p in figs)
+
+    def test_heatmap_is_25_up_and_25_down(self, tmp_path: Path):
+        _analysed(tmp_path)
+        caption = generate_figures()["figures"]["figures/de_heatmap.png"]
+        assert caption.startswith("Top 25 up-regulated (above the line) and 25 down-regulated")
+
+    def test_heatmap_uses_fewer_when_not_enough(self, tmp_path: Path):
+        _analysed(tmp_path, n_up=40, n_down=10)
+        caption = generate_figures()["figures"]["figures/de_heatmap.png"]
+        assert "Top 25 up-regulated" in caption and "and 10 down-regulated" in caption
+
+    def test_pca_skips_identifier_and_constant_columns(self, tmp_path: Path):
+        _analysed(tmp_path)
+        result = generate_figures()
+        assert result["pca_color_options"] == ["batch"]
+        assert "figures/pca_batch.png" in result["figures"]
+        assert not any(p in result["figures"] for p in ("figures/pca_gsm.png", "figures/pca_title.png",
+                                                         "figures/pca_cell_line.png"))
+        assert "gsm" not in result["figures"]["figures/pc_association.png"]
+
+    def test_pca_color_by_choice(self, tmp_path: Path):
+        _analysed(tmp_path)
+        assert "figures/pca_batch.png" not in generate_figures(pca_color_by=[])["figures"]
+        assert generate_figures(pca_color_by=["gsm"])["error"] == "bad_pca_columns"
+
+
+class TestWriteReport:
+    def test_requires_figures(self, tmp_path: Path):
+        _analysed(tmp_path)
+        assert write_report("# R")["error"] == "no_figures"
+
+    def test_captions_and_lossless_path_fix(self, tmp_path: Path):
+        _analysed(tmp_path)
+        generate_figures()
+        md = "# R\n\n![Volcano](volcano.png)\n\n![Heat](figures/de_heatmap.png)\n\nText."
+        result = write_report(md)
+        content = Path(result["report_path"]).read_text()
+        assert "![Volcano](figures/volcano.png)" in content  # prefix added
+        assert "*File: `figures/volcano.png` — Volcano plot:" in content
+        assert "*File: `figures/de_heatmap.png` — Top 25 up-regulated" in content
+        assert result["figures_referenced"] == 2
+        assert "figures/pca.png" in result["unreferenced_figures"]
+
+    def test_unknown_figure_rejected_nothing_written(self, tmp_path: Path):
+        _analysed(tmp_path)
+        generate_figures()
+        result = write_report("# R\n\n![Made up](figures/invented_plot.png)")
+        assert result["error"] == "unknown_figures"
+        assert "invented_plot.png" in result["message"]
+        assert not SESSION.paths.analysis_report.exists()
+
+    def test_llm_text_kept_and_one_standard_disclaimer_appended(self, tmp_path: Path):
+        _analysed(tmp_path)
+        generate_figures()
+        md = "# R\n\nDisclaimer: only 3 replicates — exploratory.\n\n---\n"
+        content = Path(write_report(md)["report_path"]).read_text()
+        assert "Disclaimer: only 3 replicates — exploratory." in content  # never removed
+        assert content.count("**Disclaimer:** This report was generated by an AI system.") == 1
+        assert "\n---\n\n---" not in content
+
+    def test_generate_report_back_compat(self, tmp_path: Path):
+        _analysed(tmp_path)
+        result = generate_report("# R\n\n![PCA](figures/pca.png)")
         assert Path(result["report_path"]).is_file()
-        assert result["n_figures"] > 0
-        assert "pca" in result["figures"]
 
-    def test_generates_qc_figures(self, count_matrix_tsv: Path, design_csv: Path):
+
+class TestProvenance:
+    def test_geo_counts(self, tmp_path: Path):
         SESSION.begin_run("test")
-        load_counts(str(count_matrix_tsv), design_path=str(design_csv))
-        result = generate_report("# QC Report")
-        assert "library_sizes" in result["figures"]
-        assert "pca" in result["figures"]
-        assert "sample_correlation" in result["figures"]
+        counts, design = _strong_de_dataset(tmp_path)
+        paths = SESSION.require_paths()
+        paths.counts_matrix.write_text(counts.read_text())
+        paths.counts_metadata.write_text(json.dumps({
+            "accession": "GSE1", "source": "author", "filename": "GSE1_counts.txt.gz", "md5": "abc",
+            "value_type": "raw_integer_counts", "gene_id_type": "symbol", "n_duplicates_summed": 0,
+        }))
+        load_counts(str(paths.counts_matrix), design_path=str(design))
+        filter_low_counts(min_count=10, min_samples=2)
+        result = summarize_findings()
+        assert result["data_source"] == "GEO count matrix"
+        assert result["data_provenance"]["source"] == "authors' supplementary file"
+        assert result["data_provenance"]["value_type"] == "raw_integer_counts"
+        assert result["filtering"]["min_count"] == 10
 
-    def test_generates_de_figures(self, count_matrix_tsv: Path, design_csv: Path):
+    def test_nfcore_salmon_only(self, nfcore_results_dir: Path):
+        import shutil
         SESSION.begin_run("test")
-        load_counts(str(count_matrix_tsv), design_path=str(design_csv))
-        filter_low_counts(min_count=1, min_samples=1)
-        run_deseq2(["condition", "KO", "WT"])
-        result = generate_report("# DE Report")
-        assert "volcano" in result["figures"]
-        assert "ma_plot" in result["figures"]
-        # de_heatmap only generated when there are significant genes (padj < 0.05);
-        # synthetic data with 2 replicates may not produce any
+        shutil.move(nfcore_results_dir / "star_salmon", nfcore_results_dir / "salmon")
+        scan_results(str(nfcore_results_dir))
+        load_counts(str(nfcore_results_dir / "salmon" / "salmon.merged.gene_counts.tsv"))
+        result = summarize_findings()
+        assert result["data_source"] == "nf-core/rnaseq"
+        assert "alignment skipped" in result["data_provenance"]["quantification"]
 
-    def test_report_written_with_disclaimer(self, count_matrix_tsv: Path):
+    def test_user_provided(self, count_matrix_tsv: Path):
         SESSION.begin_run("test")
         load_counts(str(count_matrix_tsv))
-        md = "# My Report\n\n![PCA](figures/pca.png)\n\nSome text."
-        result = generate_report(md)
-        content = Path(result["report_path"]).read_text()
-        assert "![PCA](figures/pca.png)" in content
-        assert "Disclaimer" in content
-        assert "hallucination" in content.lower()
-
-    def test_returns_figures(self, count_matrix_tsv: Path, design_csv: Path):
-        SESSION.begin_run("test")
-        load_counts(str(count_matrix_tsv), design_path=str(design_csv))
-        result = generate_report("# Report")
-        assert "figures" in result
-        assert isinstance(result["figures"], dict)
+        assert summarize_findings()["data_source"] == "user-provided"
 
 
 class TestScanResultsLooseFiles:

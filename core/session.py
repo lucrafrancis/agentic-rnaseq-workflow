@@ -34,6 +34,9 @@ class Session:
         self.design_df: pd.DataFrame | None = None
         self.deseq_results: pd.DataFrame | None = None
         self.deseq_design: str | None = None
+        self.counts_path: Path | None = None
+        self.filter_settings: dict[str, Any] | None = None
+        self.figures: list[dict] | None = None  # from generate_figures: path + caption
         self.enrichment_results: dict[str, Any] | None = None
         self.results_dir: Path | None = None
         self.multiqc_stats: pd.DataFrame | None = None

@@ -223,13 +223,29 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
-        "name": "generate_report",
-        "description": "Generate all analysis figures and write the Markdown report. "
-        "The returned 'figures' dict contains the EXACT figure paths generated — "
-        "use ONLY those paths in the report, do not invent filenames. "
-        "Enrichment figures are named enrichment_<label>_<gene_set>.png when a label "
-        "was used (e.g. enrichment_upregulated_go_biological_process_2023.png). "
-        "A hallucination disclaimer is appended automatically. Call this last.",
+        "name": "generate_figures",
+        "description": "Draw all figures for the current analysis and return each figure's "
+        "path with a factual caption (e.g. how many genes the heatmap shows). Call after "
+        "summarize_findings and BEFORE writing the report, so the report describes the real "
+        "figures. Optional pca_color_by chooses which design columns get their own PCA plot "
+        "(default: all informative columns; identifier and constant columns are never allowed).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "pca_color_by": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Design columns to colour extra PCA plots by, e.g. ['tissue'].",
+                },
+            },
+        },
+    },
+    {
+        "name": "write_report",
+        "description": "Write the final Markdown report. Link figures only by the paths "
+        "returned by generate_figures — links to other figures are rejected and nothing is "
+        "written. The tool inserts each figure's file path and factual caption beneath it and "
+        "appends the standard disclaimer. Call last.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -256,5 +272,6 @@ TOOL_FUNCTIONS: dict[str, Callable[..., dict[str, Any]]] = {
     "get_top_genes": tools.get_top_genes,
     "run_enrichment": tools.run_enrichment,
     "summarize_findings": tools.summarize_findings,
-    "generate_report": tools.generate_report,
+    "generate_figures": tools.generate_figures,
+    "write_report": tools.write_report,
 }
