@@ -136,4 +136,5 @@ def nfcore_results_dir(tmp_path: Path, count_matrix_tsv: Path) -> Path:
 def isolate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Redirect outputs to a temp dir and reset the SESSION singleton for each test."""
     monkeypatch.setattr(config, "RUNS_DIR", tmp_path / "runs")
+    monkeypatch.setattr(config, "REFERENCE_DIR", tmp_path / "reference")
     SESSION.__init__()

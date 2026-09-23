@@ -13,10 +13,14 @@ with the appropriate parameters.
 ## Before configuring
 
 Always call check_resources first to see the machine's available RAM, CPUs, disk space,
-and Docker status. Set max_memory below the available RAM to leave ~10% headroom
-(e.g. 36 GB RAM → '32.GB'), and set max_cpus to the available count.
+and Docker status. The memory ceiling is what the containers can actually use: with the
+docker profile that is Docker's memory (docker.memory_gb), which on macOS is often well
+below the host's RAM because Docker runs in a VM; otherwise it is the host's memory_gb.
+Set max_memory ~10% below that ceiling (e.g. Docker 23.4 GB on a 36 GB Mac → '21.GB';
+36 GB host without Docker → '32.GB'), and max_cpus to the CPUs available to the same
+executor. configure_submission rejects a max_memory above the ceiling.
 
-STAR/RSEM alignment needs ~32 GB RAM for human — if the machine doesn't have enough,
+STAR/RSEM alignment needs ~32 GB RAM for human — if the ceiling is below that,
 set skip_alignment: true to use salmon pseudo-alignment instead.
 
 ## What to look for in the prompt
@@ -30,6 +34,8 @@ set skip_alignment: true to use salmon pseudo-alignment instead.
 ## What NOT to set
 
 - Do not set input, outdir, pipeline, or revision — these are handled automatically
+- Do not set fasta, gtf, transcript_fasta, salmon_index or save_reference unless the user
+  asks — for Salmon-only runs the tool reuses a cached reference or builds and saves one
 - Do not guess parameters that aren't mentioned or implied by the prompt
 - When in doubt, leave defaults — nf-core has sensible ones
 

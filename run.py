@@ -402,6 +402,8 @@ def _submit_with_troubleshooting(samplesheet_path: str) -> dict:
             print(f"\nPipeline finished successfully.")
             print(f"  Results: {outcome['outdir']}")
 
+            _cache_reference(params)
+
             from agents.submission.troubleshoot import review_warnings
             print("Checking for warnings...")
             warnings = review_warnings(outcome.get("log_path", ""))
@@ -457,6 +459,23 @@ def _submit_with_troubleshooting(samplesheet_path: str) -> dict:
         })
 
     sys.exit(1)
+
+
+def _cache_reference(params) -> None:
+    """Copy a reference this run built (save_reference) into the shared cache, for reuse."""
+    from agents.submission.reference import cache_reference, salmon_only
+
+    if params.reference or not params.extra_args.get("save_reference") or not salmon_only(params.extra_args):
+        return
+    try:
+        result = cache_reference(params.genome, params.revision, Path(params.outdir), SESSION.require_paths().name)
+    except OSError as exc:
+        print(f"  ⚠ Reference not cached: {exc}")
+        return
+    if result["status"] == "cached":
+        print(f"  Reference cached for reuse: {result['path']}")
+    elif result["status"] == "not_cached":
+        print("  ⚠ Reference not cached: " + "; ".join(result["problems"]))
 
 
 def _run_analysis(results_dir: str | None, *, original_prompt: str = "") -> None:

@@ -23,6 +23,7 @@ from pathlib import Path
 import anthropic
 
 from agents.submission.params import SubmissionParams
+from agents.submission.tools import resource_limit_error
 from core import config
 from core.loop import add_usage, log_usage, new_usage
 from core.session import SESSION
@@ -292,6 +293,18 @@ def diagnose_and_propose(
                             "content": json.dumps(result),
                         })
                     elif block.name == "propose_fix":
+                        changes = block.input.get("parameter_changes") or {}
+                        error = resource_limit_error(changes.get("profile", params.profile),
+                                                     {**params.extra_args, **changes})
+                        if block.input.get("category") == "parameter_change" and error:
+                            print(f"\n⚠ Proposed fix rejected: {error}")
+                            tool_results.append({
+                                "type": "tool_result",
+                                "tool_use_id": block.id,
+                                "content": json.dumps({"error": "resource_limit", "message": error}),
+                                "is_error": True,
+                            })
+                            continue
                         has_proposal = True
                         proposal = block.input
                         _log_event({"event": "diagnosis", "attempt": attempt, "proposal": proposal})

@@ -30,6 +30,7 @@ class SubmissionParams:
     genome: str = "GRCh38"
     profile: str = "docker"
     extra_args: dict[str, Any] = field(default_factory=dict)
+    reference: str | None = None  # cached reference dir (set by code); replaces --genome
 
     @property
     def pipeline_params(self) -> dict[str, Any]:
@@ -99,7 +100,11 @@ class SubmissionParams:
         YAML preserves types — booleans stay booleans, so nf-schema
         won't reject them as strings.
         """
-        params: dict[str, Any] = {"genome": self.genome}
+        if self.reference:
+            from agents.submission.reference import nf_reference_params
+            params: dict[str, Any] = dict(nf_reference_params(Path(self.reference)))
+        else:
+            params = {"genome": self.genome}
         params.update(self.pipeline_params)
         lines = []
         for key, value in params.items():
@@ -112,7 +117,7 @@ class SubmissionParams:
         path.write_text("\n".join(lines) + "\n")
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d = {
             "pipeline": self.pipeline,
             "revision": self.revision,
             "input": self.input_samplesheet,
@@ -121,12 +126,15 @@ class SubmissionParams:
             "profile": self.profile,
             **self.extra_args,
         }
+        if self.reference:
+            d["reference"] = self.reference
+        return d
 
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SubmissionParams":
         """Reconstruct from a to_dict() round-trip (e.g. params.json)."""
-        _KNOWN = {"pipeline", "revision", "input", "outdir", "genome", "profile"}
+        _KNOWN = {"pipeline", "revision", "input", "outdir", "genome", "profile", "reference"}
         return cls(
             pipeline=data.get("pipeline", NFCORE_PIPELINE),
             revision=data.get("revision", NFCORE_REVISION),
@@ -134,6 +142,7 @@ class SubmissionParams:
             outdir=data.get("outdir", ""),
             genome=data.get("genome", "GRCh38"),
             profile=data.get("profile", "docker"),
+            reference=data.get("reference"),
             extra_args={k: v for k, v in data.items() if k not in _KNOWN},
         )
 
