@@ -6,12 +6,17 @@ one-line edit and nothing else in the codebase depends on it.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
 # --- LLM ---------------------------------------------------------------------
-MODEL = "claude-haiku-4-5-20251001"
 MODEL_SONNET = "claude-sonnet-4-5-20250929"
+# Agent-loop model. AGENT_MODEL overrides it for one run, e.g. AGENT_MODEL=sonnet to
+# compare against the default. Recorded per agent in the run's usage.jsonl.
+_MODEL_ALIASES = {"haiku": "claude-haiku-4-5-20251001", "sonnet": MODEL_SONNET}
+_requested = os.environ.get("AGENT_MODEL") or "haiku"
+MODEL = _MODEL_ALIASES.get(_requested, _requested)
 MAX_TOKENS = 16384
 MAX_TURNS = 40
 

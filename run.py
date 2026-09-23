@@ -123,7 +123,9 @@ def _counts_stage(prompt: str) -> None:
 
     meta = json.loads(paths.counts_metadata.read_text())
     design = {row["sample"]: row for row in csv.DictReader(paths.design.open())}
-    covariates = [c for c in next(iter(design.values())) if c not in ("sample", "condition", "gsm", "title")]
+    extra = [c for c in next(iter(design.values())) if c not in ("sample", "condition", "gsm", "title")]
+    covariates = [c for c in extra if len({row[c] for row in design.values()}) > 1]
+    constants = {c: next(iter(design.values()))[c] for c in extra if c not in covariates}
     lines = [
         f"Source: {meta['filename']} ({meta['source']})",
         f"Values: {meta['value_type']}  |  genes: {meta['n_genes']}  |  gene IDs: {meta['gene_id_type']}"
@@ -138,6 +140,8 @@ def _counts_stage(prompt: str) -> None:
             f"{s['file_column']:<28} {s['gsm']:<12} {s['sample']:<28} {row.get('condition', '?')}"
             + "".join(f" | {row.get(c, '')}" for c in covariates)
         )
+    if constants:
+        lines.append("\nSame for all samples: " + "; ".join(f"{k} = {v}" for k, v in constants.items()))
     if meta["dropped_columns"]:
         lines.append(f"\nDropped file columns: {', '.join(meta['dropped_columns'][:15])}")
     if meta["unmapped_gsms"]:

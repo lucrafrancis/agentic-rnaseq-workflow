@@ -511,6 +511,7 @@ def compute_qc() -> Summary:
 
     lib_sizes = {s: int(counts[s].sum()) for s in samples}
     genes_detected = {s: int((counts[s] > 0).sum()) for s in samples}
+    SESSION.qc_snapshot = {"library_sizes": pd.Series(lib_sizes), "genes_detected": pd.Series(genes_detected)}
 
     # PCA on log2(counts + 1)
     log_counts = np.log2(counts.values.astype(float).T + 1)  # samples x genes
@@ -549,6 +550,8 @@ def compute_qc() -> Summary:
         "genes_detected": genes_detected,
         "pca": pca_summary,
         "variance_explained": [round(v, 4) for v in var_explained],
+        "pca_note": "This PCA is on unfiltered counts. The report's PCA figure and "
+                    "{{qc.pca_pc1_pct}}/{{qc.pca_pc2_pct}} use the filtered matrix — cite those.",
         "multiqc_summary": multiqc_summary,
     }
 
@@ -987,6 +990,40 @@ def _key(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", str(text).lower()).strip("_")
 
 
+def _library_stats() -> tuple[pd.Series, pd.Series]:
+    """Per-sample total counts and genes detected, from the compute_qc snapshot (before
+    low-count filtering) when available, else from the current matrix. Used by the facts,
+    the QC table and the library-size figure so they always agree."""
+    if SESSION.qc_snapshot is not None:
+        return SESSION.qc_snapshot["library_sizes"], SESSION.qc_snapshot["genes_detected"]
+    counts = SESSION.counts_df
+    return counts.sum(axis=0), (counts > 0).sum(axis=0)
+
+
+def _pca() -> dict[str, Any]:
+    """PCA of log2(counts + 1) on the current (filtered) matrix — the single computation
+    behind the PCA figures, their captions and the qc.pca_* facts."""
+    counts = SESSION.counts_df
+    log_counts = np.log2(counts.values.astype(float).T + 1)
+    centered = log_counts - log_counts.mean(axis=0)
+    U, S, _Vt = np.linalg.svd(centered, full_matrices=False)
+    n_pcs = min(10, len(S))
+    return {"coords": U[:, :n_pcs] * S[:n_pcs], "var_exp": (S ** 2) / (S ** 2).sum(),
+            "samples": list(counts.columns), "n_pcs": n_pcs}
+
+
+def _sample_correlation() -> pd.DataFrame:
+    return np.log2(SESSION.counts_df.astype(float) + 1).corr(method="pearson")
+
+
+def _library_key(gene_set: str) -> str:
+    if gene_set.startswith("GO_Biological_Process"):
+        return "go_bp"
+    if gene_set.startswith("KEGG"):
+        return "kegg"
+    return _key(gene_set)
+
+
 def _facts() -> dict[str, str]:
     """Every value the report may cite, rendered as text, keyed by placeholder name.
 
@@ -1002,16 +1039,35 @@ def _facts() -> dict[str, str]:
 
     if SESSION.counts_df is not None:
         counts = SESSION.counts_df
-        lib = counts.sum(axis=0)
+        lib, detected = _library_stats()
         f["samples.n"] = _fmt_int(counts.shape[1])
         f["qc.library_size_min_millions"] = f"{lib.min() / 1e6:.1f}"
         f["qc.library_size_max_millions"] = f"{lib.max() / 1e6:.1f}"
+        f["qc.library_size_median_millions"] = f"{lib.median() / 1e6:.1f}"
+        f["qc.genes_detected_min"] = _fmt_int(detected.min())
+        f["qc.genes_detected_max"] = _fmt_int(detected.max())
+        if counts.shape[1] >= 2:
+            pca = _pca()
+            f["qc.pca_pc1_pct"] = f"{pca['var_exp'][0]:.1%}"
+            if pca["n_pcs"] > 1:
+                f["qc.pca_pc2_pct"] = f"{pca['var_exp'][1]:.1%}"
+            f["qc.sample_correlation_min"] = f"{_sample_correlation().values.min():.2f}"
     if SESSION.design_df is not None and SESSION.counts_df is not None:
         design = SESSION.design_df.loc[[c for c in SESSION.counts_df.columns if c in SESSION.design_df.index]]
         per = design["condition"].value_counts()
         f["samples.conditions"] = ", ".join(map(str, per.index))
         for cond, n in per.items():
             f[f"samples.n_{_key(cond)}"] = _fmt_int(n)
+        # Other design columns: constant ones are facts about every sample (e.g. time point,
+        # cell type); varying ones list their levels. Identifiers are skipped.
+        for col in design.columns:
+            if col in ("condition", "gsm", "title") or design[col].nunique() == len(design) > 1:
+                continue
+            values = list(dict.fromkeys(design[col].astype(str)))
+            if len(values) == 1:
+                f[f"design.{_key(col)}"] = values[0]
+            else:
+                f[f"design.{_key(col)}_values"] = ", ".join(values)
     if SESSION.filter_settings:
         fs = SESSION.filter_settings
         f["filter.min_count"] = _fmt_int(fs["min_count"])
@@ -1019,6 +1075,7 @@ def _facts() -> dict[str, str]:
         f["filter.genes_before"] = _fmt_int(fs["genes_before"])
         f["filter.genes_after"] = _fmt_int(fs["genes_after"])
         f["filter.genes_removed"] = _fmt_int(fs["genes_before"] - fs["genes_after"])
+        f["filter.pct_removed"] = _fmt_pct(fs["genes_before"] - fs["genes_after"], fs["genes_before"])
 
     if SESSION.deseq_results is not None:
         res = SESSION.deseq_results.dropna(subset=["padj"])
@@ -1048,6 +1105,10 @@ def _facts() -> dict[str, str]:
         f[f"{pre}.n_input_genes"] = _fmt_int(e.get("n_input_genes", 0))
         f[f"{pre}.gene_sets"] = ", ".join(e.get("gene_sets", []))
         f[f"{pre}.organism"] = str(e.get("organism"))
+        for gs, terms in e.get("results", {}).items():
+            for rank, term in enumerate(terms, start=1):
+                f[f"{pre}.{_library_key(gs)}.{rank}"] = (
+                    f"{term['term']} ({term['overlap']} genes, padj {_fmt_p(term['padj'])})")
         if sel:
             f[f"{pre}.padj_max"] = str(sel["padj_max"])
             f[f"{pre}.lfc_min"] = str(sel["lfc_min"])
@@ -1073,11 +1134,12 @@ def _tables() -> dict[str, str]:
     facts = _facts()
     if SESSION.counts_df is not None:
         counts = SESSION.counts_df
+        lib, detected = _library_stats()
         rows = []
         for s_ in counts.columns:
             cond = (str(SESSION.design_df.loc[s_, "condition"])
                     if SESSION.design_df is not None and s_ in SESSION.design_df.index else "")
-            rows.append([s_, cond, _fmt_int(counts[s_].sum()), _fmt_int((counts[s_] > 0).sum())])
+            rows.append([s_, cond, _fmt_int(lib[s_]), _fmt_int(detected[s_])])
         t["qc"] = _md_table(["Sample", "Condition", "Total counts", "Genes detected"], rows)
     if SESSION.deseq_results is not None:
         t["de_summary"] = _md_table(["Measure", "Value"], [
@@ -1163,24 +1225,15 @@ def _draw_figures(pca_color_by: list[str]) -> list[dict]:
         unique = list(dict.fromkeys(conditions_series))
         return {c: _PALETTE[i % len(_PALETTE)] for i, c in enumerate(unique)}
 
-    # --- PCA (reusable computation) ---
-    pca_data = None
-    if SESSION.counts_df is not None:
-        counts = SESSION.counts_df
-        log_counts = np.log2(counts.values.astype(float).T + 1)
-        centered = log_counts - log_counts.mean(axis=0)
-        U, S, Vt = np.linalg.svd(centered, full_matrices=False)
-        n_pcs = min(10, len(S))
-        coords = U[:, :n_pcs] * S[:n_pcs]
-        var_exp = (S ** 2) / (S ** 2).sum()
-        samples = list(counts.columns)
-        pca_data = {"coords": coords, "var_exp": var_exp, "samples": samples, "n_pcs": n_pcs}
+    # --- PCA (shared with the qc.pca_* facts) ---
+    pca_data = _pca() if SESSION.counts_df is not None and SESSION.counts_df.shape[1] >= 2 else None
 
     # --- Library size bar plot ---
     if SESSION.counts_df is not None:
         counts = SESSION.counts_df
         samples = list(counts.columns)
-        lib_sizes = [float(counts[s].sum()) for s in samples]
+        lib_series, _detected = _library_stats()
+        lib_sizes = [float(lib_series[s]) for s in samples]
 
         fig, ax = plt.subplots(figsize=(max(6, len(samples) * 0.8), 5))
         colors = [_NS_COLOR] * len(samples)
@@ -1198,8 +1251,9 @@ def _draw_figures(pca_color_by: list[str]) -> list[dict]:
                 ax.bar([], [], color=color, label=cond)
             ax.legend(fontsize=9, frameon=False)
         _save(fig, "library_sizes.png",
-              f"Total counts per sample ({len(samples)} samples, "
-              f"{min(lib_sizes) / 1e6:.1f}–{max(lib_sizes) / 1e6:.1f} million), coloured by condition.")
+              f"Total counts per sample{' before low-count filtering' if SESSION.qc_snapshot else ''} "
+              f"({len(samples)} samples, {min(lib_sizes) / 1e6:.1f}–{max(lib_sizes) / 1e6:.1f} million), "
+              f"coloured by condition.")
 
     # --- PCA by condition ---
     if pca_data is not None:
@@ -1305,9 +1359,7 @@ def _draw_figures(pca_color_by: list[str]) -> list[dict]:
 
     # --- Sample correlation heatmap ---
     if SESSION.counts_df is not None:
-        counts = SESSION.counts_df
-        log_counts_df = np.log2(counts.astype(float) + 1)
-        corr = log_counts_df.corr(method="pearson")
+        corr = _sample_correlation()
         samples = list(corr.columns)
         n = len(samples)
 

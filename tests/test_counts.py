@@ -23,24 +23,28 @@ SOFT = """\
 !Sample_organism_ch1 = Homo sapiens
 !Sample_characteristics_ch1 = tissue: cornea
 !Sample_characteristics_ch1 = infection: mock
+!Sample_characteristics_ch1 = time point: 24 hours
 !Sample_library_strategy = RNA-Seq
 ^SAMPLE = GSM2
 !Sample_title = Mock rep2
 !Sample_organism_ch1 = Homo sapiens
 !Sample_characteristics_ch1 = tissue: limbus
 !Sample_characteristics_ch1 = infection: mock
+!Sample_characteristics_ch1 = time point: 24 hours
 !Sample_library_strategy = RNA-Seq
 ^SAMPLE = GSM3
 !Sample_title = CoV2 rep1
 !Sample_organism_ch1 = Homo sapiens
 !Sample_characteristics_ch1 = tissue: cornea
 !Sample_characteristics_ch1 = infection: SARS-CoV-2
+!Sample_characteristics_ch1 = time point: 24 hours
 !Sample_library_strategy = RNA-Seq
 ^SAMPLE = GSM4
 !Sample_title = CoV2 rep2
 !Sample_organism_ch1 = Homo sapiens
 !Sample_characteristics_ch1 = tissue: limbus
 !Sample_characteristics_ch1 = infection: SARS-CoV-2
+!Sample_characteristics_ch1 = time point: 24 hours
 !Sample_library_strategy = RNA-Seq
 """
 
@@ -120,7 +124,8 @@ class TestListSources:
         r = _listed(geo)
         assert r["n_samples"] == 4
         assert r["organisms"] == ["Homo sapiens"]
-        assert r["samples"]["GSM1"]["characteristics"] == {"tissue": "cornea", "infection": "mock"}
+        assert r["samples"]["GSM1"]["characteristics"] == {
+            "tissue": "cornea", "infection": "mock", "time_point": "24 hours"}
         files = {f["name"]: f for f in r["files"]}
         assert "filelist.txt" not in files
         assert files["GSE1234_counts.txt.gz"]["supported"]
@@ -244,9 +249,10 @@ class TestSaveDesign:
         r = counts.save_geo_design(condition_field="infection")
         assert r["conditions"] == {"mock": 2, "SARS-CoV-2": 2}
         assert r["covariates"] == ["tissue"]
+        assert r["constant_characteristics"] == {"time_point": "24 hours"}
         assert r["low_replication"] == ["mock", "SARS-CoV-2"]
         design = pd.read_csv(SESSION.paths.design)
-        assert list(design.columns) == ["sample", "condition", "gsm", "title", "tissue"]
+        assert list(design.columns) == ["sample", "condition", "gsm", "title", "tissue", "time_point"]
         assert design.loc[0, "sample"] == "Mock_rep1"
 
     def test_explicit_conditions(self, geo):

@@ -71,6 +71,14 @@ Values in the report come from code, never from you. This is the most important 
   interpretation in your words, but the value itself only as a placeholder.
 - Describe things consistently with the facts: e.g. the data source and value type
   ({{provenance.data_source}}, {{provenance.value_type}}), never "normalised" for raw counts.
+- Useful facts include QC ({{qc.pca_pc1_pct}}, {{qc.genes_detected_min}},
+  {{qc.library_size_median_millions}}, {{qc.sample_correlation_min}}), filtering
+  ({{filter.pct_removed}}), each enrichment term with its statistics
+  ({{enrichment.up.go_bp.1}}, {{enrichment.down.kegg.2}}, ...) and the experiment's design
+  ({{design.<column>}} for anything shared by all samples, e.g. {{design.time_point}},
+  {{design.cell_type}}; {{design.<column>_values}} for the levels of other columns).
+- Never guess experimental details (time point, cell type, dose, tissue). If there's no
+  fact for it and it isn't in the fetched metadata or abstract, say it isn't recorded.
 - If write_report rejects the report, it lists every problem — fix them all at once.
 - Placeholders only work inside write_report. In your chat messages to the user, refer
   to the report instead of quoting values.

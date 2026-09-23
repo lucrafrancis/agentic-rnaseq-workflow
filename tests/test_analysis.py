@@ -616,6 +616,41 @@ class TestPlaceholders:
         assert facts["samples.n_ko"] == "3"
         assert facts["enrichment.up.lfc_min"] == "1.0"
 
+    def test_new_qc_filter_design_and_term_facts(self, tmp_path, monkeypatch):
+        from agents.analysis.tools import _pca
+        self._ready(tmp_path, monkeypatch)
+        facts = summarize_findings()["facts"]
+        pca = _pca()
+        assert facts["qc.pca_pc1_pct"] == f"{pca['var_exp'][0]:.1%}"
+        caption = generate_figures()["figures"]["figures/pca.png"]
+        assert facts["qc.pca_pc1_pct"] in caption and facts["qc.pca_pc2_pct"] in caption
+        for key in ("qc.genes_detected_min", "qc.genes_detected_max", "qc.library_size_median_millions",
+                    "qc.sample_correlation_min", "filter.pct_removed"):
+            assert facts[key]
+        assert facts["design.cell_line"] == "X"            # constant column -> fact
+        assert facts["design.batch_values"] == "a, b, c"    # varying column -> its levels
+        assert not any(k.startswith(("design.gsm", "design.title")) for k in facts)
+        assert facts["enrichment.up.go_bp.1"] == (
+            "regulation of transcription (GO:0006355) (5/100 genes, padj 0.010)")
+        assert facts["enrichment.down.kegg.1"].startswith("Pathway X (3/40 genes")
+
+    def test_pct_rounding_is_correct(self):
+        from agents.analysis.tools import _fmt_pct
+        assert _fmt_pct(13009, 27946) == "46.6%"  # the value Haiku typed as 46.5%
+
+    def test_library_stats_are_pre_filter_everywhere(self, tmp_path):
+        SESSION.begin_run("test")
+        counts, design = _strong_de_dataset(tmp_path)
+        load_counts(str(counts), design_path=str(design))
+        compute_qc()
+        raw_lib = SESSION.counts_df.sum(axis=0)
+        filter_low_counts(min_count=500, min_samples=6)   # aggressive: changes totals
+        facts = summarize_findings()["facts"]
+        assert facts["qc.library_size_max_millions"] == f"{raw_lib.max() / 1e6:.1f}"
+        figs = generate_figures()["figures"]
+        assert "before low-count filtering" in figs["figures/library_sizes.png"]
+        assert f"{raw_lib.max() / 1e6:.1f} million" in figs["figures/library_sizes.png"]
+
     def test_tables_come_from_results(self, tmp_path, monkeypatch):
         from agents.analysis.tools import _ranked
         self._ready(tmp_path, monkeypatch)

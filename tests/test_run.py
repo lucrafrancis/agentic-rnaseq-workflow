@@ -270,7 +270,8 @@ class TestCountsStage:
                 ],
                 "dropped_columns": ["Length"], "unmapped_gsms": [],
             }))
-            paths.design.write_text("sample,condition,gsm,title,tissue\nA,ctrl,GSM1,A,x\nB,trt,GSM2,B,y\n")
+            paths.design.write_text("sample,condition,gsm,title,tissue,time_point\n"
+                                    "A,ctrl,GSM1,A,x,24 h\nB,trt,GSM2,B,y,24 h\n")
         return agent
 
     def test_analyze_prompt_with_accession_fetches_counts(self, stubbed, monkeypatch, tmp_path):
@@ -290,6 +291,8 @@ class TestCountsStage:
         assert SESSION.is_complete("download")
         assert stubbed["analysis"] == [None]
         assert "colA" in previews[0] and "GSM1" in previews[0] and "ctrl" in previews[0] and "tissue" in previews[0]
+        assert "Same for all samples: time_point = 24 h" in previews[0]
+        assert "| time_point" not in previews[0]  # constant: not shown as a covariate column
 
     def test_rejected_counts_exit_before_analysis(self, stubbed, monkeypatch):
         monkeypatch.setattr("agents.download.loop.run_counts_agent", self._fake_counts_agent([]))

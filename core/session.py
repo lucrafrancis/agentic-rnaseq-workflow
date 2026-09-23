@@ -39,6 +39,7 @@ class Session:
         self.report_attempts: int = 0
         self.counts_path: Path | None = None
         self.filter_settings: dict[str, Any] | None = None
+        self.qc_snapshot: dict[str, Any] | None = None  # library sizes/detection before filtering
         self.figures: list[dict] | None = None  # from generate_figures: path + caption
         self.enrichment_results: dict[str, Any] | None = None
         self.results_dir: Path | None = None

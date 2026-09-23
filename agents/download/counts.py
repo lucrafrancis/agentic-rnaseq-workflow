@@ -511,7 +511,8 @@ def save_geo_design(condition_field: str | None = None, conditions: dict[str, st
 
     Give exactly one of: condition_field (a characteristics key, e.g. "treatment") or
     conditions ({GSM: label}, when the condition is only in the titles). Every other
-    characteristic that varies across samples is kept as a covariate column.
+    characteristic that varies across samples is kept as a covariate column; constant
+    ones (e.g. time point) are kept as columns too, as facts for the report.
     """
     paths = SESSION.require_paths()
     sources = _load_sources()
@@ -539,9 +540,12 @@ def save_geo_design(condition_field: str | None = None, conditions: dict[str, st
 
     keys = sorted({k for c in chars.values() for k in c} - {condition_field})
     varying = [k for k in keys if len({c.get(k, "") for c in chars.values()}) > 1]
+    # Constant characteristics (e.g. time_point, cell type) are kept too: they're facts the
+    # report needs, and constant columns are never used as covariates or plotted.
+    constant = [k for k in keys if k not in varying]
     rows = [
         {"sample": s["sample"], "condition": labels[s["gsm"]], "gsm": s["gsm"], "title": s["title"],
-         **{k: chars[s["gsm"]].get(k, "") for k in varying}}
+         **{k: chars[s["gsm"]].get(k, "") for k in varying + constant}}
         for s in sample_table
     ]
     pd.DataFrame(rows).to_csv(paths.design, index=False)
@@ -551,5 +555,6 @@ def save_geo_design(condition_field: str | None = None, conditions: dict[str, st
         "design_path": str(paths.design),
         "conditions": counts,
         "covariates": varying,
+        "constant_characteristics": {k: next(iter(chars.values())).get(k, "") for k in constant},
         "low_replication": [c for c, n in counts.items() if n < 3],
     }
