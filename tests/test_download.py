@@ -471,3 +471,57 @@ class TestRunSelection:
         result = check_existing_files(str(tmp_path), runs=["SRR002"])
         assert result["n_files"] == 1
         assert result["files"][0]["run"] == "SRR002"
+
+
+class TestSuperSeries:
+    SUPER_SOFT = (
+        "^SERIES = GSE110004\n!Series_title = Umbrella study\n"
+        "!Series_relation = SuperSeries of: GSE110000\n"
+        "!Series_relation = SuperSeries of: GSE110003\n"
+        "!Series_relation = BioProject: https://www.ncbi.nlm.nih.gov/bioproject/PRJNA432544\n"
+    )
+
+    def _get(self, url):
+        if "db=gds" in url:
+            return "1. Umbrella study\n(Submitter supplied) This SuperSeries is composed of the SubSeries listed below.\n"
+        if "acc=GSE110004" in url:
+            return self.SUPER_SOFT
+        if "acc=GSE110000" in url:
+            return "^SERIES = GSE110000\n!Series_title = ChIP-seq of Rap1\n"
+        if "acc=GSE110003" in url:
+            return "^SERIES = GSE110003\n!Series_title = RNA-seq of Rap1 depletion\n"
+        raise AssertionError(url)
+
+    @patch("agents.download.tools._http_get_json")
+    def test_superseries_lists_subseries(self, mock_get_json, run_dir: Path):
+        mock_get_json.return_value = {"esearchresult": {"idlist": ["200110004"]}}
+        with patch("agents.download.tools._http_get", side_effect=self._get):
+            result = resolve_accession("GSE110004")
+        assert result["error"] == "superseries"
+        assert result["subseries"] == [
+            {"accession": "GSE110000", "title": "ChIP-seq of Rap1"},
+            {"accession": "GSE110003", "title": "RNA-seq of Rap1 depletion"},
+        ]
+
+    @patch("agents.download.tools._http_get_json")
+    def test_superseries_soft_blocked_is_lookup_failure(self, mock_get_json, run_dir: Path):
+        mock_get_json.return_value = {"esearchresult": {"idlist": ["200110004"]}}
+
+        def get(url):
+            return self._get(url) if "db=gds" in url else "<!doctype html><html>captcha"
+
+        with patch("agents.download.tools._http_get", side_effect=get):
+            result = resolve_accession("GSE110004")
+        assert result["error"] == "lookup_failed"
+
+    @patch("agents.download.tools._http_get_json")
+    def test_subseries_titles_are_best_effort(self, mock_get_json, run_dir: Path):
+        mock_get_json.return_value = {"esearchresult": {"idlist": ["200110004"]}}
+
+        def get(url):
+            return "<html>blocked" if "acc=GSE110000" in url else self._get(url)
+
+        with patch("agents.download.tools._http_get", side_effect=get):
+            result = resolve_accession("GSE110004")
+        assert result["subseries"][0] == {"accession": "GSE110000"}
+        assert result["subseries"][1]["title"] == "RNA-seq of Rap1 depletion"

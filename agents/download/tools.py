@@ -29,6 +29,8 @@ _ENA_FIELDS = (
 _ENA_API = "https://www.ebi.ac.uk/ena/portal/api/filereport"
 _NCBI_ESEARCH = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
 _NCBI_EFETCH = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
+_GEO_ACC = "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi"
+_MAX_SUBSERIES_TITLES = 10
 
 
 class LookupFailed(RuntimeError):
@@ -36,6 +38,15 @@ class LookupFailed(RuntimeError):
 
     Distinct from "queried fine, nothing found" — resolvers return [] only for that.
     """
+
+
+class SuperSeries(Exception):
+    """The GSE is a SuperSeries: raw data is linked from its SubSeries, not from it."""
+
+    def __init__(self, gse: str, subseries: list[dict]):
+        super().__init__(f"{gse} is a SuperSeries")
+        self.gse = gse
+        self.subseries = subseries
 
 
 def _http_get(url: str, timeout: int = 30) -> str:
@@ -158,7 +169,38 @@ def _resolve_gse(gse: str) -> list[dict]:
     if match:
         return _resolve_study(match.group(1))
 
+    if "SuperSeries" in record:
+        raise SuperSeries(gse, _subseries(gse))
+
     return []
+
+
+def _series_soft(gse: str) -> str:
+    """Brief GEO SOFT record for a series (title, types, relations)."""
+    try:
+        text = _http_get(f"{_GEO_ACC}?acc={gse}&targ=self&form=text&view=brief")
+    except urllib.error.URLError as exc:
+        raise LookupFailed(f"GEO record fetch failed for {gse}: {exc}") from exc
+    if not text.lstrip().startswith("^SERIES"):
+        raise LookupFailed(f"GEO returned no SOFT record for {gse} (likely rate limiting)")
+    return text
+
+
+def _subseries(gse: str) -> list[dict]:
+    """SubSeries of a SuperSeries, with titles (best effort) so the agent can choose."""
+    accs = re.findall(r"!Series_relation = SuperSeries of: (GSE\d+)", _series_soft(gse))
+    out = []
+    for i, acc in enumerate(accs):
+        entry = {"accession": acc}
+        if i < _MAX_SUBSERIES_TITLES:
+            try:
+                m = re.search(r"!Series_title = (.+)", _series_soft(acc))
+                if m:
+                    entry["title"] = m.group(1).strip()
+            except LookupFailed:
+                pass
+        out.append(entry)
+    return out
 
 
 def _resolve_study(study: str) -> list[dict]:
@@ -214,6 +256,17 @@ def resolve_accession(accession: str) -> Summary:
             runs = _resolve_runs([accession])
         else:
             runs = _resolve_study(accession)
+    except SuperSeries as exc:
+        return {
+            "error": "superseries",
+            "subseries": exc.subseries,
+            "message": (
+                f"{accession} is a GEO SuperSeries — an umbrella record for several SubSeries. "
+                "The raw data is linked from the SubSeries. If the prompt clearly identifies "
+                "one (by assay, organism or comparison), call resolve_accession with it and "
+                "say which you chose and why; otherwise list them for the user and stop."
+            ),
+        }
     except LookupFailed as exc:
         return {
             "error": "lookup_failed",
