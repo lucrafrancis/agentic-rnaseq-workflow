@@ -375,11 +375,18 @@ def _run_analysis(results_dir: str, *, original_prompt: str = "") -> None:
         user_message = "\n".join(context_parts)
 
     from agents.analysis.loop import run_analysis_agent
+    from agents.analysis.replay import write_replay_script
+
+    log = paths.analysis_tool_log
+    log_start = len(log.read_text().splitlines()) if log.is_file() else 0
     run_analysis_agent(user_message)
     SESSION.mark_stage_complete("analysis")
 
     if paths.analysis_report.is_file():
         print(f"\nAnalysis report: {paths.analysis_report}")
+    replay = write_replay_script(log, paths.analysis_dir / "replay.py", start_line=log_start)
+    if replay:
+        print(f"Replay script: {replay}")
     print("Done.")
 
 

@@ -552,3 +552,83 @@ class TestSchemas:
         from agents.analysis.schemas import TOOL_SCHEMAS
         names = [s["name"] for s in TOOL_SCHEMAS]
         assert len(names) == len(set(names))
+
+
+class TestReplayScript:
+    def _log(self, path: Path, entries: list[tuple[str, dict, dict]]) -> Path:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a") as f:
+            for tool, args, summary in entries:
+                f.write(json.dumps({"tool": tool, "args": args, "summary": summary}) + "\n")
+        return path
+
+    def test_skips_failed_and_read_only_calls(self, tmp_path: Path):
+        from agents.analysis.replay import write_replay_script
+
+        log = self._log(tmp_path / "run" / "analysis" / "tool_calls.jsonl", [
+            ("fetch_geo_metadata", {"accession": "GSE1"}, {"title": "x"}),
+            ("load_counts", {"counts_path": "missing.tsv"}, {"error": "not_a_file"}),
+            ("load_counts", {"counts_path": "counts.tsv"}, {"n_genes": 20}),
+            ("get_top_genes", {"n": 10}, {"genes": []}),
+            ("run_deseq2", {"contrast": ["condition", "KO", "WT"]}, {"n_up": 5}),
+        ])
+        script = write_replay_script(log, log.parent / "replay.py")
+        text = script.read_text()
+        compile(text, str(script), "exec")
+        assert "missing.tsv" not in text
+        assert "fetch_geo_metadata" not in text
+        assert "get_top_genes" not in text
+        assert "counts_path='counts.tsv'" in text
+        assert "contrast=['condition', 'KO', 'WT']" in text
+
+    def test_start_line_skips_earlier_sessions(self, tmp_path: Path):
+        from agents.analysis.replay import write_replay_script
+
+        log = self._log(tmp_path / "run" / "analysis" / "tool_calls.jsonl", [
+            ("filter_low_counts", {"min_count": 99}, {"genes_after": 1}),
+            ("filter_low_counts", {"min_count": 5}, {"genes_after": 15}),
+        ])
+        text = write_replay_script(log, log.parent / "replay.py", start_line=1).read_text()
+        assert "min_count=5" in text
+        assert "min_count=99" not in text
+
+    def test_nothing_to_replay(self, tmp_path: Path):
+        from agents.analysis.replay import write_replay_script
+
+        log = self._log(tmp_path / "run" / "analysis" / "tool_calls.jsonl", [
+            ("inspect_counts", {}, {"likely_raw_counts": True}),
+        ])
+        assert write_replay_script(log, log.parent / "replay.py") is None
+        assert write_replay_script(tmp_path / "absent.jsonl", tmp_path / "replay.py") is None
+
+    def test_replay_reproduces_de_results(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        count_matrix_tsv: Path, design_csv: Path,
+    ):
+        import pandas as pd
+        from agents.analysis.replay import write_replay_script
+        from core import config
+
+        SESSION.begin_run("original")
+        paths = SESSION.require_paths()
+        calls = [
+            ("load_counts", {"counts_path": str(count_matrix_tsv), "design_path": str(design_csv)}),
+            ("filter_low_counts", {"min_count": 10, "min_samples": 2}),
+            ("run_deseq2", {"contrast": ["condition", "KO", "WT"]}),
+        ]
+        tools_mod = __import__("agents.analysis.tools", fromlist=["x"])
+        self._log(paths.analysis_tool_log, [
+            (name, args, getattr(tools_mod, name)(**args)) for name, args in calls
+        ])
+        original = pd.read_csv(paths.de_results, index_col=0)
+
+        script = write_replay_script(paths.analysis_tool_log, paths.analysis_dir / "replay.py")
+        monkeypatch.chdir(tmp_path)  # the script chdirs to the repo root; restore afterwards
+        exec(compile(script.read_text(), str(script), "exec"), {
+            "__file__": str(config.ROOT / "runs" / "original" / "analysis" / "replay.py"),
+            "__name__": "__main__",
+        })
+
+        assert SESSION.require_paths().name.endswith("original_replay")
+        replayed = pd.read_csv(SESSION.require_paths().de_results, index_col=0)
+        pd.testing.assert_frame_equal(original, replayed)
