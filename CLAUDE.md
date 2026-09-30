@@ -82,7 +82,7 @@ Agent loops and the troubleshooter use automatic prompt caching (top-level `cach
 - `examples/GSE164073/`, `examples/GSE157852/` — curated copies of counts-mode smoke runs (2026-09-30, analysis on Sonnet 5.5, ~$0.23–0.25 each): prompt, design, provenance, both agents' tool logs, usage, report + figures, DE/enrichment results and `replay.py` (data paths repointed to `examples/<GSE>/` — the only edit; logs unchanged). Replaying either reproduces its report and `de_results.csv` exactly. Refresh by re-running the smoke test and copying the run folder without `geo/` and `run_state.json`.
 - `examples/smoke/` — the three smoke-test prompts (below). Older ad-hoc examples (GSE245856, demo/yeast/Drosophila FASTQs) were moved out of git to `data/legacy_examples/` (gitignored, local data kept).
 
-## Current status (2026-09-23)
+## Current status (2026-09-30)
 
 **Goal right now:** validate the workflow end to end on real data, then build a benchmark of varied GEO datasets.
 
@@ -90,13 +90,14 @@ Agent loops and the troubleshooter use automatic prompt caching (top-level `cach
 
 1. `GSE157852_counts` (counts mode, single factor) — **passing** on Haiku and Sonnet.
 2. `GSE164073_counts` (counts mode, hidden `tissue` covariate) — **passing**; both models add `covariates=["tissue"]` unprompted.
-3. `GSE246386_full` (full pipeline: download → samplesheet → nextflow salmon-only → analysis, 6 paired-end runs, 5.49 GB) — **in progress**. Download (12 files, MD5-verified) and samplesheet (approved; names match GEO titles) are done. The first samplesheet attempt exposed the `save_samplesheet` schema/signature mismatch and the LLM path relay (both fixed), and the first submission set `max_memory` 32 GB against Docker's 23.4 GB (prompt and tool check fixed). Next: delete the run's `params.json`, `--resume`, confirm `save_reference: true` in `nf_params.yml`, approve. This first nextflow run builds the GRCh38 Salmon index and should populate `data/reference/GRCh38/nf-core-rnaseq-3.26.0/`; the next Salmon-only run is the first real test of reuse.
+3. `GSE246386_full` (full pipeline: download → samplesheet → nextflow Salmon-only → analysis, 6 paired-end runs, 5.5 GB) — **passing** end to end (`runs/20260930_GSE246386_full`, fresh run on 2026-09-30): existing FASTQs verified by MD5 and not re-downloaded; the GRCh38 reference cache (built 2026-09-23, `gtf_source`/`fasta_source` backfilled into its `reference.json`) was reused; nextflow 50/50 tasks in 1 h 20 min on 8 CPUs / 26 GB, `work/` 10 GB; warning review on Sonnet 5.5 fine; report accepted on the 2nd attempt. API cost ~$0.31 (download $0.01, samplesheet $0.04, submission $0.01, analysis $0.25).
 
 **Model comparison** (same decisions on both datasets): Haiku ~$0.09–0.12 per counts-mode dataset, Sonnet ~$0.28–0.31. Sonnet writes longer reports and types more numbers by hand; Haiku made one rounding slip before the relevant facts existed. Decision: Haiku for the counts/download/samplesheet/submission agents, Sonnet for the analysis agent (report prose quality; ~$0.23–0.25 per counts-mode run on Sonnet 5.5, 2026-09-30; more restrained, better-hedged reports than Sonnet 5); samplesheet-agent model still open.
 
 **Next steps**
 
-- Finish and review the GSE246386 full run: nextflow, reference caching, post-run warnings, analysis.
+- Restrict the samplesheet agent's `list_directory`/`read_file` to the run and data directories (in the GSE246386 run it listed the repo root five times); also needed before the benchmark.
+- Notify the user when the workflow is waiting for them (nextflow finished or failed, long download done): macOS notification by default, optional phone push via an `NTFY_TOPIC` env var; notifications never approve anything.
 - Download approval screen prints the whole ~400-line script and only shows the run → GSM → title table when a subset is selected; it should always show the labelled table, sizes and tool, and just give the script path.
 - Build the benchmark — see **Benchmark plan** below.
 - **To do (parked): review agent** — see **Review agent plan** below.
@@ -121,7 +122,7 @@ Agent loops and the troubleshooter use automatic prompt caching (top-level `cach
 
 **Logging (both phases):** nothing is overwritten — `analysis/report_v1.md`, `review_v1.json`, `revisions.jsonl` (phase 2: flag → replaced/removed/disputed, old/new text, reason), `review_v2.json`, final `report.md`. Revisions are saved as text-replacement steps so `replay.py` reproduces the final report without either LLM. Reviewer cost goes in `usage.jsonl` (estimate $0.15–0.30 per report on Sonnet).
 
-**First test case:** `runs/20260923_GSE246386_full` second report (15:32). Known errors: "aligned to the reference genome" (Salmon-only); integrins "down" (9 of 14 significant are up); BCR signalling "a hallmark of hematopoietic commitment" (the term is driven by SYK/BTK/PRKCB, which also drive "Platelet activation"); "sufficient to reprogram"/"recapitulates EHT" (abstract: "partial"); invented "24-hour window" and "absence of LSD1 activity"; ALOX15/IGFBP5/CCDC80/TGFBI "implicated in hematopoietic specification" and GIMAP4 as an endothelial marker (from memory); interferon genes as "markers of hematopoietic priming" (uncited); "minimal batch effects" (no batch information); counts called "reads"; a rewritten filtering rule in its own section.
+**Test cases:** the 2026-09-30 reports (`examples/GSE164073`, `examples/GSE157852`, `runs/20260930_GSE246386_full`). Their remaining errors are subtle: counts called "reads"; ACE2 "very low expression" and TTR "the choroid plexus marker" stated without evidence; GSE157852 saying the 24 hpi samples "are not in the supplied matrix" (the counts stage dropped them). The deleted 2026-09-23 GSE246386 report had the error types the reviewer must catch; the 2026-09-30 re-run has none of them: "aligned to the reference genome" (Salmon-only); integrins "down" (9 of 14 significant are up); BCR signalling "a hallmark of hematopoietic commitment" (the term is driven by SYK/BTK/PRKCB, which also drive "Platelet activation"); "sufficient to reprogram"/"recapitulates EHT" (abstract: "partial"); invented "24-hour window" and "absence of LSD1 activity"; ALOX15/IGFBP5/CCDC80/TGFBI "implicated in hematopoietic specification" and GIMAP4 as an endothelial marker (from memory); interferon genes as "markers of hematopoietic priming" (uncited); "minimal batch effects" (no batch information); counts called "reads"; a rewritten filtering rule in its own section.
 
 ## Benchmark plan (not built yet)
 

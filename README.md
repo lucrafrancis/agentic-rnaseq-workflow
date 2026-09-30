@@ -130,9 +130,9 @@ Tested with Nextflow 26.04, OpenJDK 26, Docker 29.7 and nf-core/rnaseq 3.26.0 (p
 - **Docker Desktop.** The pipeline can only use the memory Docker is given (Settings →
   Resources), not all of your Mac's RAM. The submission agent sets resource limits from
   what Docker actually has.
-- **Disk.** Budget for the FASTQs (about 6 GB for the smoke test), the reference and
-  Docker images, and Nextflow's `work/` folder, which can grow to several times the input
-  size. Delete `work/` once you've checked the results.
+- **Disk.** Budget for the FASTQs (5.5 GB for the smoke test), the reference and Docker
+  images, and Nextflow's `work/` folder (10 GB for the smoke test), which can grow to
+  several times the input size. Delete `work/` once you've checked the results.
 - **Faster downloads (optional).** The download script uses Aspera if installed, then
   aria2c (`brew install aria2`), then curl.
 
@@ -141,8 +141,8 @@ uv run python run.py examples/smoke/GSE246386_full/prompt.txt
 ```
 
 The first Salmon-only run builds a GRCh38 index and caches it in `data/reference/`; later
-runs reuse it. The full path has been run stage by stage on real data; a complete
-end-to-end run is in progress.
+runs reuse it. The smoke test (6 paired-end samples) ran end to end in 1 h 20 min of
+Nextflow time on 8 CPUs and 26 GB with a cached reference, for about $0.31 in API usage.
 
 ## Usage
 
@@ -208,9 +208,9 @@ uv run pytest
 This is a working prototype, not a validated clinical or production tool. Check the
 results before relying on them.
 
-- Counts mode has been tested end to end on real GEO series. The full FASTQ → nf-core
-  path has been exercised stage by stage on real data; a complete end-to-end run is in
-  progress.
+- Tested end to end on real GEO series: counts mode on two datasets, and the full
+  FASTQ → nf-core → report path on one (GSE246386, Salmon-only). Linux, STAR alignment
+  and larger designs are untested.
 - Code guarantees the numbers, tables, figure captions and Methods, but not the prose.
   The LLM can still overstate or invent claims in the interpretation, e.g. calling counts
   "reads".

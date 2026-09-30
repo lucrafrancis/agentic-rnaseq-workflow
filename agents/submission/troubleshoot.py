@@ -380,6 +380,29 @@ flagging, respond with exactly: "No warnings to report."
 """
 
 
+_ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def _warnings(log_content: str) -> list[str]:
+    """Every WARN in the log, whole. nf-core prints multi-line warnings as a box —
+    "WARN: ~~~~", the message lines, then a closing "~~~~" line — so the message is on the
+    lines after the one containing WARN."""
+    lines = [_ANSI.sub("", line).rstrip() for line in log_content.splitlines()]
+    warnings, i = [], 0
+    while i < len(lines):
+        if "WARN" in lines[i]:
+            block = [lines[i]]
+            if lines[i].rstrip().endswith("~~~~"):  # box: collect until the closing border
+                i += 1
+                while i < len(lines) and not lines[i].lstrip().startswith("~~~~"):
+                    if lines[i].strip():
+                        block.append(lines[i])
+                    i += 1
+            warnings.append("\n".join(block))
+        i += 1
+    return warnings
+
+
 def review_warnings(log_path: str) -> str | None:
     """Scan a successful run's log for warnings and return a concise LLM summary.
 
@@ -389,8 +412,8 @@ def review_warnings(log_path: str) -> str | None:
     if "(log file not found)" in log_content:
         return None
 
-    warn_lines = [line for line in log_content.splitlines() if "WARN" in line]
-    if not warn_lines:
+    warnings = _warnings(log_content)
+    if not warnings:
         return None
 
     client = anthropic.Anthropic()
@@ -398,12 +421,15 @@ def review_warnings(log_path: str) -> str | None:
         model=config.MODEL_SONNET,
         max_tokens=config.MAX_TOKENS,  # thinking counts towards the limit
         system=_WARNING_REVIEW_PROMPT,
-        messages=[{"role": "user", "content": f"Nextflow log warnings:\n\n" + "\n".join(warn_lines)}],
+        messages=[{"role": "user", "content": "Nextflow log warnings:\n\n" + "\n\n".join(warnings)}],
     )
+    usage = new_usage()
+    add_usage(usage, response.usage)
+    log_usage("warning_review", config.MODEL_SONNET, usage)
 
     # The first block may be a thinking block, not text.
     summary = "\n".join(b.text for b in response.content if b.type == "text").strip()
-    _log_event({"event": "warning_review", "n_warnings": len(warn_lines), "summary": summary})
+    _log_event({"event": "warning_review", "n_warnings": len(warnings), "summary": summary})
 
     if summary == "No warnings to report.":
         return None
