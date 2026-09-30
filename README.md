@@ -81,17 +81,23 @@ Most of the code exists because an LLM is a lossy intermediary. It is good at de
 
 ## Examples
 
-Both examples were run in counts mode. Each folder holds the prompt, the design table,
-the provenance of the GEO file, both agents' tool logs, token usage, the report with its
-figures, and a `replay.py`.
+Each folder holds the prompt, every agent's tool log, token usage and cost, the report
+with its figures, and a `replay.py` that reruns the analysis without the LLM.
 
 | Example | What it shows |
 |---|---|
+| [GSE246386: GFI1B in iPSC-derived hemogenic endothelium](examples/GSE246386/analysis/report.md) | **The full pipeline**, FASTQ → report: download with MD5 checks, sample sheet from GEO labels, nf-core/rnaseq (Salmon) with a cached reference, warning review, analysis. 1 h 20 min, ~$0.31 |
 | [GSE164073: SARS-CoV-2 in eye tissue](examples/GSE164073/analysis/report.md) | A hidden covariate: the agent adds `tissue` to the model unprompted, and QC compares replicates within each tissue |
 | [GSE157852: SARS-CoV-2 in choroid plexus organoids](examples/GSE157852/analysis/report.md) | Choosing one contrast from three groups; viral transcripts among the top "genes", recognised as such |
 
 The reports are unedited. Numbers, tables, figure captions and Methods come from code; the
 prose is the LLM's and can still overstate things (see [Limitations](#status-and-limitations)).
+
+The two counts-mode examples also hold the GEO file's provenance and the design table. The
+full-pipeline example holds the approved sample sheet and the nextflow script, parameters
+and config it ran with; its `results/` folder is trimmed to the files the analysis reads.
+Paths in it were made repo-relative, and on a machine without the reference cache its
+replay names the annotation file by path rather than as "iGenomes … GRCh38".
 
 ## Setup
 
@@ -130,9 +136,9 @@ Tested with Nextflow 26.04, OpenJDK 26, Docker 29.7 and nf-core/rnaseq 3.26.0 (p
 - **Docker Desktop.** The pipeline can only use the memory Docker is given (Settings →
   Resources), not all of your Mac's RAM. The submission agent sets resource limits from
   what Docker actually has.
-- **Disk.** Budget for the FASTQs (about 6 GB for the smoke test), the reference and
-  Docker images, and Nextflow's `work/` folder, which can grow to several times the input
-  size. Delete `work/` once you've checked the results.
+- **Disk.** Budget for the FASTQs (5.5 GB for the smoke test), the reference and Docker
+  images, and Nextflow's `work/` folder (10 GB for the smoke test), which can grow to
+  several times the input size. Delete `work/` once you've checked the results.
 - **Faster downloads (optional).** The download script uses Aspera if installed, then
   aria2c (`brew install aria2`), then curl.
 
@@ -141,8 +147,8 @@ uv run python run.py examples/smoke/GSE246386_full/prompt.txt
 ```
 
 The first Salmon-only run builds a GRCh38 index and caches it in `data/reference/`; later
-runs reuse it. The full path has been run stage by stage on real data; a complete
-end-to-end run is in progress.
+runs reuse it. The smoke test (6 paired-end samples) ran end to end in 1 h 20 min of
+Nextflow time on 8 CPUs and 26 GB with a cached reference, for about $0.31 in API usage.
 
 ## Usage
 
@@ -208,9 +214,9 @@ uv run pytest
 This is a working prototype, not a validated clinical or production tool. Check the
 results before relying on them.
 
-- Counts mode has been tested end to end on real GEO series. The full FASTQ → nf-core
-  path has been exercised stage by stage on real data; a complete end-to-end run is in
-  progress.
+- Tested end to end on real GEO series: counts mode on two datasets, and the full
+  FASTQ → nf-core → report path on one (GSE246386, Salmon-only). Linux, STAR alignment
+  and larger designs are untested.
 - Code guarantees the numbers, tables, figure captions and Methods, but not the prose.
   The LLM can still overstate or invent claims in the interpretation, e.g. calling counts
   "reads".

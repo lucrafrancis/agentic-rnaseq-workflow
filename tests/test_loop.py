@@ -72,3 +72,13 @@ def test_tool_log_paths_are_repo_relative(tmp_path):
     entry = json.loads(log.read_text())
     assert entry["args"] == {"counts_path": "runs/r/counts.tsv", "other": "/tmp/x.tsv"}
     assert entry["summary"] == {"files": ["runs/r/a.png"], "message": "wrote runs/r/b.csv", "n": 3}
+
+
+def test_repo_root_itself_logged_as_dot(tmp_path):
+    root = loop.config.ROOT
+    log = tmp_path / "tool_calls.jsonl"
+    loop._log_tool_call(log, "list_directory", {"path": str(root)},
+                        {"path": str(root), "sibling": f"{root}-other/x"})
+    entry = json.loads(log.read_text())
+    assert entry["args"] == {"path": "."}
+    assert entry["summary"] == {"path": ".", "sibling": f"{root}-other/x"}  # a different directory

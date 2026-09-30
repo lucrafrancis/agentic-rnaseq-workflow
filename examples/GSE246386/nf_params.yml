@@ -1,0 +1,5 @@
+gtf: "data/reference/GRCh38/nf-core-rnaseq-3.26.0/genes.gtf"
+transcript_fasta: "data/reference/GRCh38/nf-core-rnaseq-3.26.0/transcripts.fa"
+salmon_index: "data/reference/GRCh38/nf-core-rnaseq-3.26.0/salmon_index"
+skip_alignment: true
+pseudo_aligner: "salmon"

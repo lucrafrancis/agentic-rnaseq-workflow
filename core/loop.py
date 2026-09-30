@@ -7,6 +7,7 @@ This module handles the conversation loop, tool dispatch, and logging.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Callable
 
@@ -158,7 +159,9 @@ def _repo_relative(value: Any) -> Any:
     """Paths inside the repo, written relative to it: logs don't expose the local home
     directory, and replay (which runs from the repo root) works from any clone."""
     if isinstance(value, str):
-        return value.replace(f"{config.ROOT}/", "")
+        root = str(config.ROOT)
+        value = value.replace(f"{root}/", "")
+        return re.sub(re.escape(root) + r"(?![\w.-])", ".", value)  # the repo root itself
     if isinstance(value, dict):
         return {k: _repo_relative(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):

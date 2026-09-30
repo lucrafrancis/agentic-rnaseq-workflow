@@ -1,0 +1,7 @@
+sample,fastq_1,fastq_2,strandedness
+GFI1B_3,data/GSE246386/fastqs/SRR26539594_1.fastq.gz,data/GSE246386/fastqs/SRR26539594_2.fastq.gz,auto
+GFI1B_2,data/GSE246386/fastqs/SRR26539595_1.fastq.gz,data/GSE246386/fastqs/SRR26539595_2.fastq.gz,auto
+GFI1B_1,data/GSE246386/fastqs/SRR26539596_1.fastq.gz,data/GSE246386/fastqs/SRR26539596_2.fastq.gz,auto
+EV_3,data/GSE246386/fastqs/SRR26539597_1.fastq.gz,data/GSE246386/fastqs/SRR26539597_2.fastq.gz,auto
+EV_2,data/GSE246386/fastqs/SRR26539598_1.fastq.gz,data/GSE246386/fastqs/SRR26539598_2.fastq.gz,auto
+EV_1,data/GSE246386/fastqs/SRR26539599_1.fastq.gz,data/GSE246386/fastqs/SRR26539599_2.fastq.gz,auto

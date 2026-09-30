@@ -1,0 +1,6 @@
+GSE246386 — GFI1B ectopic expression in human iPSC-derived hemogenic endothelium (CD34+ iPSC-HE, day 4).
+Homo sapiens, GRCh38. Paired-end RNA-seq; strandedness is auto.
+Download the FASTQs and run nf-core/rnaseq.
+Skip alignment (salmon only) — this runs on a laptop.
+Compare GFI1B overexpression against empty vector (EV).
+Run the full downstream analysis: QC, differential expression, enrichment, and report.

@@ -369,6 +369,26 @@ def test_warning_review_reads_text_after_thinking_block(monkeypatch: pytest.Monk
     assert troubleshoot.review_warnings(str(log)) == "Odd but harmless."
     assert client.calls[0]["model"] == config.MODEL_SONNET
     assert client.calls[0]["max_tokens"] == config.MAX_TOKENS
+    usage = json.loads(SESSION.paths.usage_log.read_text())
+    assert usage["agent"] == "warning_review" and usage["estimated_cost_usd"] is not None
+
+
+def test_warnings_include_multiline_box_text():
+    """nf-core's boxed warnings, as they appear in a real nextflow log (with ANSI colours)."""
+    from agents.submission.troubleshoot import _warnings
+
+    log = ("\x1b[33mWARN: ~~~~~~~~~~~~~~~~~~~~\n"
+           "  '--transcript_fasta' parameter has been provided.\n"
+           "  Make sure transcript names in this file match those in the GFF/GTF file.\n"
+           "\n"
+           "~~~~~~~~~~~~~~~~~~~~\x1b[39m\x1b[K\n"
+           "process > NFCORE_RNASEQ:SALMON_QUANT\n"
+           "WARN: The operator `first` is useless when applied to a value channel\n")
+    warnings = _warnings(log)
+    assert len(warnings) == 2
+    assert "Make sure transcript names in this file match" in warnings[0]
+    assert "~" not in warnings[0].split("\n", 1)[1] and "\x1b" not in warnings[0]
+    assert warnings[1].startswith("WARN: The operator `first`")
 
 
 
