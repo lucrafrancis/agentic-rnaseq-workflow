@@ -1,0 +1,104 @@
+{
+  "accession": "GSE157852",
+  "files": [
+    {
+      "name": "GSE157852_CPO_RawCounts.txt.gz",
+      "size": "416K",
+      "source": "author",
+      "url": "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE157nnn/GSE157852/suppl/GSE157852_CPO_RawCounts.txt.gz",
+      "kind": "table",
+      "supported": true
+    },
+    {
+      "name": "GSE157852_raw_counts_GRCh38.p13_NCBI.tsv.gz",
+      "url": "https://www.ncbi.nlm.nih.gov/geo/download/?type=rnaseq_counts&acc=GSE157852&format=file&file=GSE157852_raw_counts_GRCh38.p13_NCBI.tsv.gz",
+      "size": null,
+      "source": "ncbi_generated",
+      "kind": "table",
+      "supported": true
+    }
+  ],
+  "samples": {
+    "GSM4776784": {
+      "title": "Mock 72 hpi rep1",
+      "organism": "Homo sapiens",
+      "library_strategy": "RNA-Seq",
+      "characteristics": {
+        "cell_type": "hiPSC-derived choroid plexus organoids (CPOs)",
+        "treatment": "Mock 72 hpi"
+      }
+    },
+    "GSM4776785": {
+      "title": "Mock 72 hpi rep2",
+      "organism": "Homo sapiens",
+      "library_strategy": "RNA-Seq",
+      "characteristics": {
+        "cell_type": "hiPSC-derived choroid plexus organoids (CPOs)",
+        "treatment": "Mock 72 hpi"
+      }
+    },
+    "GSM4776786": {
+      "title": "Mock 72 hpi rep3",
+      "organism": "Homo sapiens",
+      "library_strategy": "RNA-Seq",
+      "characteristics": {
+        "cell_type": "hiPSC-derived choroid plexus organoids (CPOs)",
+        "treatment": "Mock 72 hpi"
+      }
+    },
+    "GSM4776787": {
+      "title": "SARS-CoV-2 24 hpi rep1",
+      "organism": "Homo sapiens",
+      "library_strategy": "RNA-Seq",
+      "characteristics": {
+        "cell_type": "hiPSC-derived choroid plexus organoids (CPOs)",
+        "treatment": "SARS-CoV-2 24 hpi"
+      }
+    },
+    "GSM4776788": {
+      "title": "SARS-CoV-2 24 hpi rep2",
+      "organism": "Homo sapiens",
+      "library_strategy": "RNA-Seq",
+      "characteristics": {
+        "cell_type": "hiPSC-derived choroid plexus organoids (CPOs)",
+        "treatment": "SARS-CoV-2 24 hpi"
+      }
+    },
+    "GSM4776789": {
+      "title": "SARS-CoV-2 24 hpi rep3",
+      "organism": "Homo sapiens",
+      "library_strategy": "RNA-Seq",
+      "characteristics": {
+        "cell_type": "hiPSC-derived choroid plexus organoids (CPOs)",
+        "treatment": "SARS-CoV-2 24 hpi"
+      }
+    },
+    "GSM4776790": {
+      "title": "SARS-CoV-2 72 hpi rep1",
+      "organism": "Homo sapiens",
+      "library_strategy": "RNA-Seq",
+      "characteristics": {
+        "cell_type": "hiPSC-derived choroid plexus organoids (CPOs)",
+        "treatment": "SARS-CoV-2 72 hpi"
+      }
+    },
+    "GSM4776791": {
+      "title": "SARS-CoV-2 72 hpi rep2",
+      "organism": "Homo sapiens",
+      "library_strategy": "RNA-Seq",
+      "characteristics": {
+        "cell_type": "hiPSC-derived choroid plexus organoids (CPOs)",
+        "treatment": "SARS-CoV-2 72 hpi"
+      }
+    },
+    "GSM4776792": {
+      "title": "SARS-CoV-2 72 hpi rep3",
+      "organism": "Homo sapiens",
+      "library_strategy": "RNA-Seq",
+      "characteristics": {
+        "cell_type": "hiPSC-derived choroid plexus organoids (CPOs)",
+        "treatment": "SARS-CoV-2 72 hpi"
+      }
+    }
+  }
+}

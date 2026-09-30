@@ -1,1 +1,0 @@
-FASTQs are in ./examples/demo_fastqs/fastqs, paired-end human RNA-seq. Metadata is in ./examples/demo_fastqs/metadata.csv. Save the sample sheet to ./examples/demo_fastqs/samplesheet.csv.

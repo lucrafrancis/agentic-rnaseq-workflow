@@ -1,0 +1,4 @@
+GSE164073 — SARS-CoV-2 infection of human ocular surface tissue.
+Homo sapiens. Start from the processed count matrix on GEO (no FASTQ processing).
+Compare SARS-CoV-2 infected against mock.
+Run the full downstream analysis: QC, differential expression, enrichment, and report.

@@ -1,1 +1,0 @@
-FASTQs are in ./examples/geo_GSE157852/fastqs. This is single-end human RNA-seq data from GEO (GSE157852), studying SARS-CoV-2 neurotropism in choroid plexus organoids. There are 6 samples: 3 mock and 3 SARS-CoV-2 infected, all at 72 hours post-infection. Metadata is in ./examples/geo_GSE157852/metadata.csv with SRR-to-sample mapping. Strandedness is auto. Genome is GRCh38.

@@ -1,0 +1,4 @@
+GSE157852 — SARS-CoV-2 infection of human choroid plexus organoids.
+Homo sapiens. Start from the processed count matrix on GEO (no FASTQ processing).
+Compare SARS-CoV-2 72 hpi against Mock 72 hpi.
+Run the full downstream analysis: QC, differential expression, enrichment, and report.

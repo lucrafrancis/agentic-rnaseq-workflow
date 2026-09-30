@@ -1,1 +1,0 @@
-FASTQs are in ./examples/nfcore_test/fastqs. This is yeast (S. cerevisiae) RNA-seq data from GSE110004. There are three conditions: WT, RAP1_UNINDUCED, and RAP1_IAA_30M. Strandedness is reverse. Save the sample sheet to ./examples/nfcore_test/samplesheet.csv.

@@ -1,4 +1,0 @@
-GSE245856 — VPA (valproic acid) treatment in HEK293T cells.
-Homo sapiens. 3 replicates per condition (untreated vs VPA-treated).
-Count matrix and design file are in this directory.
-Run full downstream analysis: QC, differential expression, enrichment, and report.

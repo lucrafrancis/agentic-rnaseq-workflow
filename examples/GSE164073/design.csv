@@ -1,0 +1,19 @@
+sample,condition,gsm,title,tissue,time_point
+Cornea_mock_1,mock,GSM4996084,Cornea_mock_1,cornea,24 hours
+Cornea_mock_2,mock,GSM4996085,Cornea_mock_2,cornea,24 hours
+Cornea_mock_3,mock,GSM4996086,Cornea_mock_3,cornea,24 hours
+Cornea_CoV2_1,"SARS-CoV-2, MOI = 1.0",GSM4996087,Cornea_CoV2_1,cornea,24 hours
+Cornea_CoV2_2,"SARS-CoV-2, MOI = 1.0",GSM4996088,Cornea_CoV2_2,cornea,24 hours
+Cornea_CoV2_3,"SARS-CoV-2, MOI = 1.0",GSM4996089,Cornea_CoV2_3,cornea,24 hours
+Limbus_mock_1,mock,GSM4996090,Limbus_mock_1,limbus,24 hours
+Limbus_mock_2,mock,GSM4996091,Limbus_mock_2,limbus,24 hours
+Limbus_mock_3,mock,GSM4996092,Limbus_mock_3,limbus,24 hours
+Limbus_CoV2_1,"SARS-CoV-2, MOI = 1.0",GSM4996093,Limbus_CoV2_1,limbus,24 hours
+Limbus_CoV2_2,"SARS-CoV-2, MOI = 1.0",GSM4996094,Limbus_CoV2_2,limbus,24 hours
+Limbus_CoV2_3,"SARS-CoV-2, MOI = 1.0",GSM4996095,Limbus_CoV2_3,limbus,24 hours
+Sclera_mock_1,mock,GSM4996096,Sclera_mock_1,sclera,24 hours
+Sclera_mock_2,mock,GSM4996097,Sclera_mock_2,sclera,24 hours
+Sclera_mock_3,mock,GSM4996098,Sclera_mock_3,sclera,24 hours
+Sclera_CoV2_1,"SARS-CoV-2, MOI = 1.0",GSM4996099,Sclera_CoV2_1,sclera,24 hours
+Sclera_CoV2_2,"SARS-CoV-2, MOI = 1.0",GSM4996100,Sclera_CoV2_2,sclera,24 hours
+Sclera_CoV2_3,"SARS-CoV-2, MOI = 1.0",GSM4996101,Sclera_CoV2_3,sclera,24 hours

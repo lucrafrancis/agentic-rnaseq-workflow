@@ -1,0 +1,125 @@
+{
+  "accession": "GSE164073",
+  "source": "author",
+  "filename": "GSE164073_Eye_count_matrix.csv.gz",
+  "url": "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE164nnn/GSE164073/suppl/GSE164073_Eye_count_matrix.csv.gz",
+  "md5": "f9a0bc147852a52d6b4397ed214e196b",
+  "gene_id_column": "Gene",
+  "gene_id_type": "symbol",
+  "value_type": "raw_integer_counts",
+  "pct_non_integer": 0.0,
+  "n_genes": 27946,
+  "n_duplicates_summed": 0,
+  "samples": [
+    {
+      "sample": "Cornea_mock_1",
+      "gsm": "GSM4996084",
+      "title": "Cornea_mock_1",
+      "file_column": "MW1_cornea_mock_1"
+    },
+    {
+      "sample": "Cornea_mock_2",
+      "gsm": "GSM4996085",
+      "title": "Cornea_mock_2",
+      "file_column": "MW2_cornea_mock_2"
+    },
+    {
+      "sample": "Cornea_mock_3",
+      "gsm": "GSM4996086",
+      "title": "Cornea_mock_3",
+      "file_column": "MW3_cornea_mock_3"
+    },
+    {
+      "sample": "Cornea_CoV2_1",
+      "gsm": "GSM4996087",
+      "title": "Cornea_CoV2_1",
+      "file_column": "MW4_cornea_CoV2_1"
+    },
+    {
+      "sample": "Cornea_CoV2_2",
+      "gsm": "GSM4996088",
+      "title": "Cornea_CoV2_2",
+      "file_column": "MW5_cornea_CoV2_2"
+    },
+    {
+      "sample": "Cornea_CoV2_3",
+      "gsm": "GSM4996089",
+      "title": "Cornea_CoV2_3",
+      "file_column": "MW6_cornea_CoV2_3"
+    },
+    {
+      "sample": "Limbus_mock_1",
+      "gsm": "GSM4996090",
+      "title": "Limbus_mock_1",
+      "file_column": "MW7_limbus_mock_1"
+    },
+    {
+      "sample": "Limbus_mock_2",
+      "gsm": "GSM4996091",
+      "title": "Limbus_mock_2",
+      "file_column": "MW8_limbus_mock_2"
+    },
+    {
+      "sample": "Limbus_mock_3",
+      "gsm": "GSM4996092",
+      "title": "Limbus_mock_3",
+      "file_column": "MW9_limbus_mock_3"
+    },
+    {
+      "sample": "Limbus_CoV2_1",
+      "gsm": "GSM4996093",
+      "title": "Limbus_CoV2_1",
+      "file_column": "MW10_limbus_CoV2_1"
+    },
+    {
+      "sample": "Limbus_CoV2_2",
+      "gsm": "GSM4996094",
+      "title": "Limbus_CoV2_2",
+      "file_column": "MW11_limbus_CoV2_2"
+    },
+    {
+      "sample": "Limbus_CoV2_3",
+      "gsm": "GSM4996095",
+      "title": "Limbus_CoV2_3",
+      "file_column": "MW12_limbus_CoV2_3"
+    },
+    {
+      "sample": "Sclera_mock_1",
+      "gsm": "GSM4996096",
+      "title": "Sclera_mock_1",
+      "file_column": "MW13_sclera_mock_1"
+    },
+    {
+      "sample": "Sclera_mock_2",
+      "gsm": "GSM4996097",
+      "title": "Sclera_mock_2",
+      "file_column": "MW14_sclera_mock_2"
+    },
+    {
+      "sample": "Sclera_mock_3",
+      "gsm": "GSM4996098",
+      "title": "Sclera_mock_3",
+      "file_column": "MW15_sclera_mock_3"
+    },
+    {
+      "sample": "Sclera_CoV2_1",
+      "gsm": "GSM4996099",
+      "title": "Sclera_CoV2_1",
+      "file_column": "MW16_sclera_CoV2_1"
+    },
+    {
+      "sample": "Sclera_CoV2_2",
+      "gsm": "GSM4996100",
+      "title": "Sclera_CoV2_2",
+      "file_column": "MW17_sclera_CoV2_2"
+    },
+    {
+      "sample": "Sclera_CoV2_3",
+      "gsm": "GSM4996101",
+      "title": "Sclera_CoV2_3",
+      "file_column": "MW18_sclera_CoV2_3"
+    }
+  ],
+  "dropped_columns": [],
+  "unmapped_gsms": []
+}

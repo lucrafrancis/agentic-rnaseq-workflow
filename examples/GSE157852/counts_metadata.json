@@ -1,0 +1,61 @@
+{
+  "accession": "GSE157852",
+  "source": "author",
+  "filename": "GSE157852_CPO_RawCounts.txt.gz",
+  "url": "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE157nnn/GSE157852/suppl/GSE157852_CPO_RawCounts.txt.gz",
+  "md5": "988011dda6a9b9c5c2830a862aaeba94",
+  "gene_id_column": "row_names",
+  "gene_id_type": "symbol",
+  "value_type": "raw_integer_counts",
+  "pct_non_integer": 0.0,
+  "n_genes": 29755,
+  "n_duplicates_summed": 0,
+  "samples": [
+    {
+      "sample": "Mock_72_hpi_rep1",
+      "gsm": "GSM4776784",
+      "title": "Mock 72 hpi rep1",
+      "file_column": "CPO_Mock_72hpi_S1"
+    },
+    {
+      "sample": "Mock_72_hpi_rep2",
+      "gsm": "GSM4776785",
+      "title": "Mock 72 hpi rep2",
+      "file_column": "CPO_Mock_72hpi_S2"
+    },
+    {
+      "sample": "Mock_72_hpi_rep3",
+      "gsm": "GSM4776786",
+      "title": "Mock 72 hpi rep3",
+      "file_column": "CPO_Mock_72hpi_S3"
+    },
+    {
+      "sample": "SARS_CoV_2_72_hpi_rep1",
+      "gsm": "GSM4776790",
+      "title": "SARS-CoV-2 72 hpi rep1",
+      "file_column": "CPO_SARS-CoV-2_72hpi_S7"
+    },
+    {
+      "sample": "SARS_CoV_2_72_hpi_rep2",
+      "gsm": "GSM4776791",
+      "title": "SARS-CoV-2 72 hpi rep2",
+      "file_column": "CPO_SARS-CoV-2_72hpi_S8"
+    },
+    {
+      "sample": "SARS_CoV_2_72_hpi_rep3",
+      "gsm": "GSM4776792",
+      "title": "SARS-CoV-2 72 hpi rep3",
+      "file_column": "CPO_SARS-CoV-2_72hpi_S9"
+    }
+  ],
+  "dropped_columns": [
+    "CPO_SARS-CoV-2_24hpi_S4",
+    "CPO_SARS-CoV-2_24hpi_S5",
+    "CPO_SARS-CoV-2_24hpi_S6"
+  ],
+  "unmapped_gsms": [
+    "GSM4776787",
+    "GSM4776788",
+    "GSM4776789"
+  ]
+}

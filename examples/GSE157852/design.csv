@@ -1,0 +1,7 @@
+sample,condition,gsm,title,cell_type
+Mock_72_hpi_rep1,Mock 72 hpi,GSM4776784,Mock 72 hpi rep1,hiPSC-derived choroid plexus organoids (CPOs)
+Mock_72_hpi_rep2,Mock 72 hpi,GSM4776785,Mock 72 hpi rep2,hiPSC-derived choroid plexus organoids (CPOs)
+Mock_72_hpi_rep3,Mock 72 hpi,GSM4776786,Mock 72 hpi rep3,hiPSC-derived choroid plexus organoids (CPOs)
+SARS_CoV_2_72_hpi_rep1,SARS-CoV-2 72 hpi,GSM4776790,SARS-CoV-2 72 hpi rep1,hiPSC-derived choroid plexus organoids (CPOs)
+SARS_CoV_2_72_hpi_rep2,SARS-CoV-2 72 hpi,GSM4776791,SARS-CoV-2 72 hpi rep2,hiPSC-derived choroid plexus organoids (CPOs)
+SARS_CoV_2_72_hpi_rep3,SARS-CoV-2 72 hpi,GSM4776792,SARS-CoV-2 72 hpi rep3,hiPSC-derived choroid plexus organoids (CPOs)

@@ -1,0 +1,2 @@
+{"agent": "counts", "model": "claude-haiku-4-5-20251001", "requests": 5, "input_tokens": 4495, "cache_creation_input_tokens": 5304, "cache_read_input_tokens": 9424, "output_tokens": 1306}
+{"agent": "analysis", "model": "claude-sonnet-5", "requests": 11, "input_tokens": 22, "cache_creation_input_tokens": 44235, "cache_read_input_tokens": 202548, "output_tokens": 8667}

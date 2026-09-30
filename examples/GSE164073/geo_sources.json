@@ -1,0 +1,203 @@
+{
+  "accession": "GSE164073",
+  "files": [
+    {
+      "name": "GSE164073_Eye_count_matrix.csv.gz",
+      "size": "596K",
+      "source": "author",
+      "url": "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE164nnn/GSE164073/suppl/GSE164073_Eye_count_matrix.csv.gz",
+      "kind": "table",
+      "supported": true
+    },
+    {
+      "name": "GSE164073_raw_counts_GRCh38.p13_NCBI.tsv.gz",
+      "url": "https://www.ncbi.nlm.nih.gov/geo/download/?type=rnaseq_counts&acc=GSE164073&format=file&file=GSE164073_raw_counts_GRCh38.p13_NCBI.tsv.gz",
+      "size": null,
+      "source": "ncbi_generated",
+      "kind": "table",
+      "supported": true
+    }
+  ],
+  "samples": {
+    "GSM4996084": {
+      "title": "Cornea_mock_1",
+      "organism": "Homo sapiens",
+      "library_strategy": "RNA-Seq",
+      "characteristics": {
+        "tissue": "cornea",
+        "infection": "mock",
+        "time_point": "24 hours"
+      }
+    },
+    "GSM4996085": {
+      "title": "Cornea_mock_2",
+      "organism": "Homo sapiens",
+      "library_strategy": "RNA-Seq",
+      "characteristics": {
+        "tissue": "cornea",
+        "infection": "mock",
+        "time_point": "24 hours"
+      }
+    },
+    "GSM4996086": {
+      "title": "Cornea_mock_3",
+      "organism": "Homo sapiens",
+      "library_strategy": "RNA-Seq",
+      "characteristics": {
+        "tissue": "cornea",
+        "infection": "mock",
+        "time_point": "24 hours"
+      }
+    },
+    "GSM4996087": {
+      "title": "Cornea_CoV2_1",
+      "organism": "Homo sapiens",
+      "library_strategy": "RNA-Seq",
+      "characteristics": {
+        "tissue": "cornea",
+        "infection": "SARS-CoV-2, MOI = 1.0",
+        "time_point": "24 hours"
+      }
+    },
+    "GSM4996088": {
+      "title": "Cornea_CoV2_2",
+      "organism": "Homo sapiens",
+      "library_strategy": "RNA-Seq",
+      "characteristics": {
+        "tissue": "cornea",
+        "infection": "SARS-CoV-2, MOI = 1.0",
+        "time_point": "24 hours"
+      }
+    },
+    "GSM4996089": {
+      "title": "Cornea_CoV2_3",
+      "organism": "Homo sapiens",
+      "library_strategy": "RNA-Seq",
+      "characteristics": {
+        "tissue": "cornea",
+        "infection": "SARS-CoV-2, MOI = 1.0",
+        "time_point": "24 hours"
+      }
+    },
+    "GSM4996090": {
+      "title": "Limbus_mock_1",
+      "organism": "Homo sapiens",
+      "library_strategy": "RNA-Seq",
+      "characteristics": {
+        "tissue": "limbus",
+        "infection": "mock",
+        "time_point": "24 hours"
+      }
+    },
+    "GSM4996091": {
+      "title": "Limbus_mock_2",
+      "organism": "Homo sapiens",
+      "library_strategy": "RNA-Seq",
+      "characteristics": {
+        "tissue": "limbus",
+        "infection": "mock",
+        "time_point": "24 hours"
+      }
+    },
+    "GSM4996092": {
+      "title": "Limbus_mock_3",
+      "organism": "Homo sapiens",
+      "library_strategy": "RNA-Seq",
+      "characteristics": {
+        "tissue": "limbus",
+        "infection": "mock",
+        "time_point": "24 hours"
+      }
+    },
+    "GSM4996093": {
+      "title": "Limbus_CoV2_1",
+      "organism": "Homo sapiens",
+      "library_strategy": "RNA-Seq",
+      "characteristics": {
+        "tissue": "limbus",
+        "infection": "SARS-CoV-2, MOI = 1.0",
+        "time_point": "24 hours"
+      }
+    },
+    "GSM4996094": {
+      "title": "Limbus_CoV2_2",
+      "organism": "Homo sapiens",
+      "library_strategy": "RNA-Seq",
+      "characteristics": {
+        "tissue": "limbus",
+        "infection": "SARS-CoV-2, MOI = 1.0",
+        "time_point": "24 hours"
+      }
+    },
+    "GSM4996095": {
+      "title": "Limbus_CoV2_3",
+      "organism": "Homo sapiens",
+      "library_strategy": "RNA-Seq",
+      "characteristics": {
+        "tissue": "limbus",
+        "infection": "SARS-CoV-2, MOI = 1.0",
+        "time_point": "24 hours"
+      }
+    },
+    "GSM4996096": {
+      "title": "Sclera_mock_1",
+      "organism": "Homo sapiens",
+      "library_strategy": "RNA-Seq",
+      "characteristics": {
+        "tissue": "sclera",
+        "infection": "mock",
+        "time_point": "24 hours"
+      }
+    },
+    "GSM4996097": {
+      "title": "Sclera_mock_2",
+      "organism": "Homo sapiens",
+      "library_strategy": "RNA-Seq",
+      "characteristics": {
+        "tissue": "sclera",
+        "infection": "mock",
+        "time_point": "24 hours"
+      }
+    },
+    "GSM4996098": {
+      "title": "Sclera_mock_3",
+      "organism": "Homo sapiens",
+      "library_strategy": "RNA-Seq",
+      "characteristics": {
+        "tissue": "sclera",
+        "infection": "mock",
+        "time_point": "24 hours"
+      }
+    },
+    "GSM4996099": {
+      "title": "Sclera_CoV2_1",
+      "organism": "Homo sapiens",
+      "library_strategy": "RNA-Seq",
+      "characteristics": {
+        "tissue": "sclera",
+        "infection": "SARS-CoV-2, MOI = 1.0",
+        "time_point": "24 hours"
+      }
+    },
+    "GSM4996100": {
+      "title": "Sclera_CoV2_2",
+      "organism": "Homo sapiens",
+      "library_strategy": "RNA-Seq",
+      "characteristics": {
+        "tissue": "sclera",
+        "infection": "SARS-CoV-2, MOI = 1.0",
+        "time_point": "24 hours"
+      }
+    },
+    "GSM4996101": {
+      "title": "Sclera_CoV2_3",
+      "organism": "Homo sapiens",
+      "library_strategy": "RNA-Seq",
+      "characteristics": {
+        "tissue": "sclera",
+        "infection": "SARS-CoV-2, MOI = 1.0",
+        "time_point": "24 hours"
+      }
+    }
+  }
+}
