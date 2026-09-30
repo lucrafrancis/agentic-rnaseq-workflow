@@ -1,2 +1,2 @@
-{"agent": "counts", "model": "claude-haiku-4-5-20251001", "requests": 5, "input_tokens": 4958, "cache_creation_input_tokens": 6452, "cache_read_input_tokens": 10813, "output_tokens": 2183}
-{"agent": "analysis", "model": "claude-sonnet-5", "requests": 12, "input_tokens": 24, "cache_creation_input_tokens": 39916, "cache_read_input_tokens": 215671, "output_tokens": 6172}
+{"agent": "counts", "model": "claude-haiku-4-5-20251001", "requests": 5, "input_tokens": 4957, "cache_creation_input_tokens": 5830, "cache_read_input_tokens": 10189, "output_tokens": 1515, "estimated_cost_usd": 0.0208}
+{"agent": "analysis", "model": "claude-sonnet-5-5", "requests": 13, "input_tokens": 28, "cache_creation_input_tokens": 38024, "cache_read_input_tokens": 233460, "output_tokens": 7196, "estimated_cost_usd": 0.2138}

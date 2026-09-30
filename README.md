@@ -176,8 +176,8 @@ approval screen should show and what to check afterwards.
 ## Models and cost
 
 - **Claude Haiku 4.5** runs the download/counts, samplesheet and submission agents.
-- **Claude Sonnet 5** runs the analysis agent, which writes the report.
-- **Claude Sonnet 4.5** runs the pipeline troubleshooter and the warning review.
+- **Claude Sonnet 5.5** runs the analysis agent, which writes the report, and the
+  pipeline troubleshooter and warning review.
 
 Both examples cost about **$0.25** each in API usage (about $0.02 for the counts agent,
 the rest for the analysis). Every run records its token use and estimated cost per agent

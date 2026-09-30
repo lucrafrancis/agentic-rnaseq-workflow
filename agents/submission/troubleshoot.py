@@ -265,7 +265,7 @@ def diagnose_and_propose(
         for _diag_turn in range(_MAX_DIAGNOSTIC_TURNS):
             response = client.messages.create(
                 model=config.MODEL_SONNET,
-                max_tokens=2048,
+                max_tokens=config.MAX_TOKENS,  # thinking counts towards the limit
                 system=_SYSTEM_PROMPT,
                 tools=[_CHECK_ENV_TOOL, _PROPOSE_FIX_TOOL],
                 messages=messages,
@@ -396,12 +396,13 @@ def review_warnings(log_path: str) -> str | None:
     client = anthropic.Anthropic()
     response = client.messages.create(
         model=config.MODEL_SONNET,
-        max_tokens=1024,
+        max_tokens=config.MAX_TOKENS,  # thinking counts towards the limit
         system=_WARNING_REVIEW_PROMPT,
         messages=[{"role": "user", "content": f"Nextflow log warnings:\n\n" + "\n".join(warn_lines)}],
     )
 
-    summary = response.content[0].text.strip()
+    # The first block may be a thinking block, not text.
+    summary = "\n".join(b.text for b in response.content if b.type == "text").strip()
     _log_event({"event": "warning_review", "n_warnings": len(warn_lines), "summary": summary})
 
     if summary == "No warnings to report.":

@@ -1,12 +1,12 @@
-## 1. Executive Summary
+# SARS-CoV-2 infection of human ocular surface tissue (GSE164073)
 
-Raw gene counts from GSE164073 (authors' supplementary file, file GSE164073_Eye_count_matrix.csv.gz) were analysed to compare SARS-CoV-2-infected human ocular surface tissue against mock-infected controls. Using a design that adjusts for tissue of origin (~tissue + condition), differential expression identified 2,491 genes changed (padj < 0.05: 1,147 up, 1,344 down out of 14,937 tested). Upregulated genes are strongly enriched for inflammatory/NF-κB and chemokine signalling (Inflammatory Response (GO:0006954) (14/236 genes, padj 3.35e-12), NF-kappa B signaling pathway (9/104 genes, padj 2.67e-10)), consistent with the associated study's report of an NF-κB-driven response to infection ((Eriksen et al., 2021; PMID: 34022129)), while downregulated genes are enriched for epithelial differentiation programs (Epithelium Development (GO:0060429) (11/154 genes, padj 1.40e-05)).
+## Executive Summary
+We compared SARS-CoV-2-infected against mock-treated ocular surface tissue from GSE164073, adjusting for tissue of origin, using the authors' raw count matrix. Infection was associated with 2,491 differentially expressed genes (1,147 up, 1,344 down). The up-regulated set was dominated by NF-κB/TNF-linked chemokine and inflammatory signatures. The down-regulated set was enriched for epithelial differentiation and keratin genes.
 
-## 2. Experimental Design
+## Experimental Design
+The dataset is GEO count matrix (authors' supplementary file, GSE164073_Eye_count_matrix.csv.gz), raw integer counts for human (Homo sapiens) cornea, limbus and sclera from cadaver donors ((Eriksen et al., 2021; PMID: 34022129)). Tissues: cornea, limbus, sclera. Conditions: mock, SARS-CoV-2, MOI = 1.0; replicates per condition: mock 9, infected 9 (18 samples in total). Time point: 24 hours. The contrast is SARS-CoV-2, MOI = 1.0 vs mock, with the design ~tissue + condition.
 
-This dataset profiles the transcriptional response of human ocular surface tissue (cornea, limbus, sclera; donor cadaver explants) to SARS-CoV-2 infection versus mock treatment, as described in (Eriksen et al., 2021; PMID: 34022129). The loaded design covers 18 samples across the conditions mock, SARS-CoV-2, MOI = 1.0 (9 mock, 9 infected), with tissue levels cornea, limbus, sclera and a time point of 24 hours. Because tissue is a major source of variation shared across both conditions (three tissues × two conditions × triplicate donors), tissue was included as a covariate in the DESeq2 model (design ~tissue + condition) so that the SARS-CoV-2-vs-mock contrast is estimated within each tissue and pooled across tissues.
-
-## 3. Quality Control
+## Quality Control
 
 | Sample | Condition | Total counts | Genes detected |
 |---|---|---|---|
@@ -31,31 +31,36 @@ This dataset profiles the transcriptional response of human ocular surface tissu
 
 *Genes detected: genes with at least one count, before low-count filtering.*
 
-Library sizes ranged from 18.9 to 27.4 million reads (median 22.0 million), and the minimum number of genes detected in any sample was 16,958 (maximum 17,636). Pairwise sample correlations ranged from 0.88 to 0.99.
+Library sizes are shown below (median 22.0 million reads; genes detected per sample ranged from 16,958 to 17,636).
 
-![Library sizes per sample, coloured by condition](figures/library_sizes.png)
+![Library sizes per sample](figures/library_sizes.png)
 
 *File: `figures/library_sizes.png` — Total counts per sample before low-count filtering (18 samples, 18.9–27.4 million), coloured by condition.*
 
-![PCA of samples coloured by condition](figures/pca.png)
+PC1 and PC2 explain 52.8% and 25.7% of variance. On PC1–PC2 within each tissue level (DESeq2 covariate), mean distance of replicates to their group centroid: SARS-CoV-2, MOI = 1.0 3.1, mock 2.8; group centroids are on average 12.5 apart. The most spread group is 1.1× the least spread. Condition explains 0% of PC1 and 0% of PC2 variance; tissue explains 99% and 98%. Samples closer to another group's centroid within each tissue level: Cornea_mock_1 (closer to SARS-CoV-2, MOI = 1.0), Cornea_CoV2_2 (closer to mock).
+
+![PCA coloured by condition](figures/pca.png)
 
 *File: `figures/pca.png` — PCA of log2(counts + 1): PC1 52.8%, PC2 25.7% of variance, coloured by condition. On PC1–PC2 within each tissue level (DESeq2 covariate), mean distance of replicates to their group centroid: SARS-CoV-2, MOI = 1.0 3.1, mock 2.8; group centroids are on average 12.5 apart. The most spread group is 1.1× the least spread. Condition explains 0% of PC1 and 0% of PC2 variance; tissue explains 99% and 98%. Samples closer to another group's centroid within each tissue level: Cornea_mock_1 (closer to SARS-CoV-2, MOI = 1.0), Cornea_CoV2_2 (closer to mock).*
 
-![PCA of samples coloured by tissue](figures/pca_tissue.png)
+![PCA coloured by tissue](figures/pca_tissue.png)
 
 *File: `figures/pca_tissue.png` — PCA of log2(counts + 1) coloured by tissue (3 values).*
 
-![PC–design variable associations](figures/pc_association.png)
+Tissue, not infection, dominates the leading principal components, which is why tissue is included as a covariate in the model. Between-sample correlations ranged from 0.88 to 0.99.
 
-*File: `figures/pc_association.png` — Association (R²) between the first 10 principal components and design variables: condition, tissue.*
-
-![Sample-to-sample correlation heatmap](figures/sample_correlation.png)
+![Sample correlation](figures/sample_correlation.png)
 
 *File: `figures/sample_correlation.png` — Pearson correlation of log2(counts + 1) between all 18 samples (range 0.88–0.99 between different samples).*
 
-On PC1–PC2 within each tissue level (DESeq2 covariate), mean distance of replicates to their group centroid: SARS-CoV-2, MOI = 1.0 3.1, mock 2.8; group centroids are on average 12.5 apart. The most spread group is 1.1× the least spread. Condition explains 0% of PC1 and 0% of PC2 variance; tissue explains 99% and 98%. Samples closer to another group's centroid within each tissue level: Cornea_mock_1 (closer to SARS-CoV-2, MOI = 1.0), Cornea_CoV2_2 (closer to mock). As the PCA plots show, PC1 and PC2 are dominated by tissue identity (99% and 98% of variance respectively) rather than infection status, which is why tissue was modelled as a covariate rather than left unadjusted. Within-tissue replicate spread is similar between the two conditions (3.1 vs 2.8), and only two samples (Cornea_mock_1, Cornea_CoV2_2) fall closer to the other condition's centroid within their tissue group. No samples were excluded as outliers.
+![PC–metadata associations](figures/pc_association.png)
 
-## 4. Differential Expression
+*File: `figures/pc_association.png` — Association (R²) between the first 10 principal components and design variables: condition, tissue.*
+
+The PCA flags Cornea_mock_1, Cornea_CoV2_2 as closer to the other condition's centroid within their tissue. No samples were removed.
+
+## Differential Expression
+After filtering, 14,937 genes remained (46.6% removed). 2,491 genes (16.7%) had padj below 0.05: 1,147 up (7.7%) and 1,344 down (9.0%).
 
 | Measure | Value |
 |---|---|
@@ -66,15 +71,13 @@ On PC1–PC2 within each tissue level (DESeq2 covariate), mean distance of repli
 | Up-regulated | 1,147 (7.7%) |
 | Down-regulated | 1,344 (9.0%) |
 
-![Volcano plot of differential expression](figures/volcano.png)
+![Volcano plot](figures/volcano.png)
 
 *File: `figures/volcano.png` — Volcano plot: 14937 genes tested; 2491 with padj < 0.05 (1147 up, 1344 down; design ~tissue + condition).*
 
-![MA plot of differential expression](figures/ma_plot.png)
+![MA plot](figures/ma_plot.png)
 
 *File: `figures/ma_plot.png` — MA plot: 14937 genes tested; 2491 with padj < 0.05 (1147 up, 1344 down; design ~tissue + condition).*
-
-Top upregulated genes include SOD2 (log2FC 2.99, padj 1.67e-286), TNFAIP3 (log2FC 1.84, padj 2.37e-142) and C3 (log2FC 2.09, padj 6.23e-97); top downregulated genes include ACAN (log2FC -1.98, padj 1.43e-93) and ACTC1 (log2FC -1.98, padj 1.04e-52).
 
 | Gene | log2FC | padj | baseMean |
 |---|---|---|---|
@@ -102,11 +105,14 @@ Top upregulated genes include SOD2 (log2FC 2.99, padj 1.67e-286), TNFAIP3 (log2F
 | H19 | -0.64 | 2.35e-27 | 4631 |
 | MCAM | -0.95 | 1.14e-26 | 949 |
 
-![Heatmap of top differentially expressed genes](figures/de_heatmap.png)
+The most significant up-regulated genes include SOD2 (log2FC 2.99, padj 1.67e-286), TNFAIP3 (log2FC 1.84, padj 2.37e-142) and C3 (log2FC 2.09, padj 6.23e-97). The top down-regulated genes include ACAN (log2FC -1.98, padj 1.43e-93), ACTC1 (log2FC -1.98, padj 1.04e-52) and CTGF (log2FC -0.62, padj 2.69e-32).
+
+![DE heatmap](figures/de_heatmap.png)
 
 *File: `figures/de_heatmap.png` — Top 25 up-regulated (above the line) and 25 down-regulated genes with padj < 0.05, ranked by padj then |log2FC|; z-scored log2(counts + 1) across 18 samples.*
 
-## 5. Gene Set Enrichment
+## Gene Set Enrichment
+Enrichment used the genes passing the thresholds described in Methods (58 up, 144 down).
 
 | Library | Term | Overlap | padj |
 |---|---|---|---|
@@ -131,13 +137,15 @@ Top upregulated genes include SOD2 (log2FC 2.99, padj 1.67e-286), TNFAIP3 (log2F
 | KEGG 2021 Human | NOD-like receptor signaling pathway | 9/181 | 2.56e-08 |
 | KEGG 2021 Human | Coronavirus disease | 9/232 | 2.01e-07 |
 
-![GO Biological Process enrichment, upregulated genes](figures/enrichment_upregulated_go_biological_process_2023.png)
+![Up GO BP](figures/enrichment_upregulated_go_biological_process_2023.png)
 
 *File: `figures/enrichment_upregulated_go_biological_process_2023.png` — Enrichr GO_Biological_Process_2023, upregulated genes (58 input genes): top 10 terms by adjusted p-value.*
 
-![KEGG enrichment, upregulated genes](figures/enrichment_upregulated_kegg_2021_human.png)
+![Up KEGG](figures/enrichment_upregulated_kegg_2021_human.png)
 
 *File: `figures/enrichment_upregulated_kegg_2021_human.png` — Enrichr KEGG_2021_Human, upregulated genes (58 input genes): top 10 terms by adjusted p-value.*
+
+Up-regulated genes were enriched for Inflammatory Response (GO:0006954) (14/236 genes, padj 3.35e-12) and Chemokine-Mediated Signaling Pathway (GO:0070098) (8/57 genes, padj 6.81e-10). KEGG terms include TNF signaling pathway (10/112 genes, padj 1.99e-11) and NF-kappa B signaling pathway (9/104 genes, padj 2.67e-10).
 
 | Library | Term | Overlap | padj |
 |---|---|---|---|
@@ -162,37 +170,33 @@ Top upregulated genes include SOD2 (log2FC 2.99, padj 1.67e-286), TNFAIP3 (log2F
 | KEGG 2021 Human | Vibrio cholerae infection | 2/50 | 0.613 |
 | KEGG 2021 Human | Pathogenic Escherichia coli infection | 4/197 | 0.613 |
 
-![GO Biological Process enrichment, downregulated genes](figures/enrichment_downregulated_go_biological_process_2023.png)
+![Down GO BP](figures/enrichment_downregulated_go_biological_process_2023.png)
 
 *File: `figures/enrichment_downregulated_go_biological_process_2023.png` — Enrichr GO_Biological_Process_2023, downregulated genes (144 input genes): top 10 terms by adjusted p-value.*
 
-![KEGG enrichment, downregulated genes](figures/enrichment_downregulated_kegg_2021_human.png)
+![Down KEGG](figures/enrichment_downregulated_kegg_2021_human.png)
 
 *File: `figures/enrichment_downregulated_kegg_2021_human.png` — Enrichr KEGG_2021_Human, downregulated genes (144 input genes): top 10 terms by adjusted p-value.*
 
-Upregulated genes are dominated by inflammatory and cytokine/chemokine terms such as Inflammatory Response (GO:0006954) (14/236 genes, padj 3.35e-12), Chemokine-Mediated Signaling Pathway (GO:0070098) (8/57 genes, padj 6.81e-10) and NF-kappa B signaling pathway (9/104 genes, padj 2.67e-10), alongside Coronavirus disease (9/232 genes, padj 2.01e-07). Downregulated genes are enriched for Epithelium Development (GO:0060429) (11/154 genes, padj 1.40e-05) and related epithelial/keratinocyte differentiation terms, indicating a loss of epithelial identity programs alongside the inflammatory response.
+Down-regulated genes were enriched for Epithelium Development (GO:0060429) (11/154 genes, padj 1.40e-05) and Keratinocyte Differentiation (GO:0030216) (5/42 genes, padj 0.002). The down-regulated KEGG terms are weaker; see the table for which reach the significance threshold.
 
-## 6. Comparison with the Published Study
+## Comparison with the published study
+No table of the paper's named genes was generated for this run, so the comparison is qualitative and based on the abstract alone. The abstract ((Eriksen et al., 2021; PMID: 34022129)) reports robust NF-κB induction in infected cells and diminished type I/III interferon signaling. NF-κB induction agrees with our results: NF-kappa B signaling pathway (9/104 genes, padj 2.67e-10) is enriched. Separately, RELB (log2FC 1.43, padj 2.73e-39), NFKBIA (log2FC 0.76, padj 2.91e-24) and NFKB2 (log2FC 0.47, padj 5.99e-12) are up. The interferon part is not clearly supported here. MX1 (log2FC 0.68, padj 6.03e-06) and STAT1 (log2FC 0.17, padj 5.27e-07) are up, while IFIT1 (log2FC 0.18, padj 0.133), ISG15 (log2FC 0.01, padj 0.986) and OAS1 (log2FC -0.17, padj 0.626) are not significant. The interferon genes IFNB1 and IFNL1 were removed by low-count filtering, so this analysis cannot assess their expression directly. Our pooled, tissue-adjusted model does not test whether interferon signaling is diminished.
 
-The associated study ((Eriksen et al., 2021; PMID: 34022129)) reports that SARS-CoV-2-infected ocular surface tissue shows "robust induction of NF-κB in infected cells as well as diminished type I/III interferon signaling." This analysis agrees with the NF-κB/inflammatory induction: RELB (log2FC 1.43, padj 2.73e-39), NFKBIA (log2FC 0.76, padj 2.91e-24) and NFKBIZ (log2FC 0.88, padj 1.58e-32) are all significantly upregulated, and the enrichment results independently recover NF-kappa B signaling pathway (9/104 genes, padj 2.67e-10) among upregulated genes. Regarding interferon signalling, the picture in this contrast is more mixed than "diminished": canonical ISGs such as ISG15 (log2FC 0.01, padj 0.986), IFIT1 (log2FC 0.18, padj 0.133), IFIT3 (log2FC 0.27, padj 0.154), OAS1 (log2FC -0.17, padj 0.626), OAS2 (log2FC 0.14, padj 0.472) and OAS3 (log2FC 0.15, padj 0.302) are not significant in this analysis, while a few others (MX1 (log2FC 0.68, padj 6.03e-06), IRF7 (log2FC 0.29, padj 0.006), STAT1 (log2FC 0.17, padj 5.27e-07)) are significantly, though modestly, upregulated. Type I/III interferon genes themselves (mock, SARS-CoV-2, MOI = 1.0 aside) were not testable — IFNB1, IFNL1, IFNL2 and IFNL3 were filtered out before DE due to low counts, so this dataset cannot directly confirm or refute the reported interferon suppression at the ligand level.
+## Biological Interpretation
+- Infection is accompanied by a chemokine and inflammatory response: CXCL* genes: 8 of 10 significant (7 up, 1 down), plus IL6 (log2FC 1.46, padj 3.14e-24), which is also up. Neutrophil Chemotaxis (GO:0030593) (8/70 genes, padj 3.09e-09) is enriched among up-regulated genes.
+- NF-κB pathway components are induced (RELB (log2FC 1.43, padj 2.73e-39), TNFAIP3 (log2FC 1.84, padj 2.37e-142)), consistent with the NF-κB signature described in (Eriksen et al., 2021; PMID: 34022129).
+- Down-regulated genes point to reduced epithelial differentiation and keratin expression (Epidermal Cell Differentiation (GO:0009913) (6/54 genes, padj 6.11e-04)). The data cannot distinguish epithelial damage from an altered cell state.
+- ACE2 (log2FC -0.86, padj 0.487) is not significantly changed, with very low expression in this dataset.
 
-## 7. Biological Interpretation
+## Limitations
+- Replication is limited to a few replicates per tissue and condition. Tissue-specific infection responses, which the abstract suggests differ by region, are not tested here because the model estimates one pooled infection effect adjusted for tissue.
+- The data are from cadaver donor tissue. Donor identity is not in the design, so pairing could not be modelled.
+- Enrichment used only strongly changed genes (see Methods). Enrichr uses its default library background rather than the expressed-gene universe. Interferon-related genes with low counts were filtered out.
+- The data are the authors' processed count matrix, so alignment and quantification were not assessed here.
+- Viral read content was not examined.
 
-- The dominant transcriptional signature of SARS-CoV-2 infection across ocular tissues is an innate-immune/inflammatory chemokine response: Cellular Response To Chemokine (GO:1990869) (9/59 genes, padj 2.15e-11) and Cytokine-cytokine receptor interaction (16/295 genes, padj 1.45e-14) are both strongly enriched among upregulated genes, consistent with recruitment of innate immune cells to infected tissue.
-- NF-κB pathway activation is evident at the gene level (RELB (log2FC 1.43, padj 2.73e-39), NFKBIA (log2FC 0.76, padj 2.91e-24), TNFAIP3 (log2FC 1.84, padj 2.37e-142) all significantly upregulated) and is independently supported by NF-kappa B signaling pathway (9/104 genes, padj 2.67e-10) enrichment, matching the qualitative direction reported in (Eriksen et al., 2021; PMID: 34022129).
-- Classical interferon-stimulated genes (ISG15 (log2FC 0.01, padj 0.986), IFIT1 (log2FC 0.18, padj 0.133), OAS1 (log2FC -0.17, padj 0.626)) are not significantly changed in this contrast, which does not straightforwardly support a strong interferon response either way in the pooled-tissue analysis; this should be interpreted cautiously given the covariate-adjusted, tissue-pooled design rather than tissue-specific comparisons.
-- Downregulated genes point to a loss of epithelial/keratinocyte differentiation programs (Epithelium Development (GO:0060429) (11/154 genes, padj 1.40e-05)), a pattern not discussed in the abstract but visible directly in this dataset.
-- Because tissue explains the large majority of overall expression variance (99% of PC1), condition-driven effects were only detectable after adjusting for tissue in the model; the infection signature described above is the shared, tissue-adjusted component of the response.
-
-## 8. Limitations
-
-- Each tissue × condition group has a modest number of donor replicates, and PCA shows replicate spread within condition groups is not negligible (3.1 vs 2.8), with a small number of samples (Cornea_mock_1, Cornea_CoV2_2) landing closer to the opposite condition's centroid within their tissue.
-- The DESeq2 model pools cornea, limbus and sclera and adjusts for tissue as a covariate; it estimates a shared infection effect across tissues rather than tissue-specific responses, even though the source study highlights the limbus specifically as a site of productive infection.
-- Type I/III interferon ligand genes (IFNB1, IFNL1/2/3) were filtered out for low counts before DE and could not be evaluated, limiting direct comparison with the paper's interferon-suppression claim.
-- Enrichment analysis used Enrichr's whole-genome background and the default significance/fold-change thresholds (0.05 padj, 1.0 log2FC) rather than a tissue-matched expressed-gene background.
-- Data originate from a processed GEO count matrix rather than raw FASTQ reprocessing, so upstream alignment/quantification choices made by the original authors could not be independently verified.
-
-## 9. Methods
+## Methods
 
 ### Data
 
@@ -234,8 +238,7 @@ Over-representation analysis of down-regulated genes used Enrichr through GSEApy
 
 Every analysis step is logged in `analysis/tool_calls.jsonl`, and `analysis/replay.py` re-runs them without the LLM. This Methods section is generated from those steps, not written by the LLM.
 
-## 10. References
-
+## References
 - (Eriksen et al., 2021; PMID: 34022129)
 
 ---

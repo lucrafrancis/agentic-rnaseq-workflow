@@ -351,6 +351,26 @@ class TestTroubleshootResourceCheck:
         assert rejection["is_error"] and "available to Docker" in rejection["content"]
 
 
+def test_warning_review_reads_text_after_thinking_block(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """Sonnet 5.5 thinks by default: the first content block can be a thinking block."""
+    from types import SimpleNamespace
+
+    from agents.submission import troubleshoot
+    from core import config
+    from tests.test_loop import FakeClient, _response
+
+    SESSION.begin_run("test_warn_review")
+    log = tmp_path / ".nextflow.log"
+    log.write_text("INFO fine\nWARN something odd\n")
+    client = FakeClient([_response([SimpleNamespace(type="thinking", thinking=""),
+                                    SimpleNamespace(type="text", text=" Odd but harmless. ")], "end_turn")])
+    monkeypatch.setattr(troubleshoot.anthropic, "Anthropic", lambda: client)
+
+    assert troubleshoot.review_warnings(str(log)) == "Odd but harmless."
+    assert client.calls[0]["model"] == config.MODEL_SONNET
+    assert client.calls[0]["max_tokens"] == config.MAX_TOKENS
+
+
 
 def _publish_reference(results: Path, gtfs=("genes.filtered.gtf",), index_files=("info.json", "versionInfo.json")) -> None:
     """What nf-core 3.26.0 publishes to results/genome/ with save_reference (Salmon-only)."""

@@ -11,23 +11,25 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 # --- LLM ---------------------------------------------------------------------
-MODEL_SONNET = "claude-sonnet-4-5-20250929"
+# The one Sonnet: analysis agent, pipeline troubleshooter and warning review. Thinking is
+# on by default (adaptive), so read text blocks by type and leave room in max_tokens.
+MODEL_SONNET = "claude-sonnet-5-5"
 # Agent-loop model. AGENT_MODEL overrides it for one run, e.g. AGENT_MODEL=sonnet to
 # compare against the default. Recorded per agent in the run's usage.jsonl.
-_MODEL_ALIASES = {"haiku": "claude-haiku-4-5-20251001", "sonnet": MODEL_SONNET, "sonnet5": "claude-sonnet-5"}
+_MODEL_ALIASES = {"haiku": "claude-haiku-4-5-20251001", "sonnet": MODEL_SONNET}
 _requested = os.environ.get("AGENT_MODEL") or "haiku"
 MODEL = _MODEL_ALIASES.get(_requested, _requested)
 # The analysis agent writes the report, where prose quality matters most, so it runs on
-# Sonnet 5 (as in agentic-scrna-workflow). ANALYSIS_MODEL=haiku overrides it for one run.
-_requested_analysis = os.environ.get("ANALYSIS_MODEL") or "sonnet5"
+# Sonnet. ANALYSIS_MODEL=haiku overrides it for one run.
+_requested_analysis = os.environ.get("ANALYSIS_MODEL") or "sonnet"
 ANALYSIS_MODEL = _MODEL_ALIASES.get(_requested_analysis, _requested_analysis)
 # USD per million tokens, for the cost estimate in each run's usage.jsonl (Anthropic
 # first-party API rates). Cache writes (5-minute TTL) cost 1.25x the input price and cache
 # reads 0.1x. A model missing here is logged without a cost.
 PRICE_PER_MTOK = {
     "claude-haiku-4-5-20251001": {"input": 1.00, "output": 5.00},
-    "claude-sonnet-5": {"input": 2.00, "output": 10.00},
-    MODEL_SONNET: {"input": 3.00, "output": 15.00},  # Sonnet 4.5
+    "claude-sonnet-5-5": {"input": 2.00, "output": 10.00},
+    "claude-sonnet-5": {"input": 2.00, "output": 10.00},  # earlier runs, incl. the committed examples
 }
 CACHE_WRITE_MULTIPLIER = 1.25
 CACHE_READ_MULTIPLIER = 0.1

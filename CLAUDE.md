@@ -47,7 +47,7 @@ The prompt file describes the data (FASTQ location, organism, metadata path, str
 
 ## Config
 
-`core/config.py` — model name, max tokens/turns, pipeline version, paths. Single source of truth. `MODEL` (Haiku 4.5) for the download/counts, samplesheet and submission agents, `ANALYSIS_MODEL` (Sonnet 5, as in agentic-scrna-workflow; `ANALYSIS_MODEL=haiku` to override) for the analysis agent, `MODEL_SONNET` (Sonnet 4.5) for troubleshooting and warning review.
+`core/config.py` — model name, max tokens/turns, pipeline version, paths. Single source of truth. `MODEL` (Haiku 4.5) for the download/counts, samplesheet and submission agents, `MODEL_SONNET` (Sonnet 5.5) for the analysis agent (`ANALYSIS_MODEL`, `ANALYSIS_MODEL=haiku` to override), troubleshooting and warning review. Sonnet 5.5 thinks by default: read responses by block type (not `content[0]`) and keep `max_tokens` at `MAX_TOKENS`, since thinking counts towards it.
 
 Agent loops and the troubleshooter use automatic prompt caching (top-level `cache_control`; Haiku 4.5 only caches prefixes ≥ 4096 tokens). Token usage and estimated cost per agent run are printed and appended to the run's `usage.jsonl` (prices in `config.PRICE_PER_MTOK`; a model without a price is logged with `estimated_cost_usd: null`).
 
@@ -79,7 +79,7 @@ Agent loops and the troubleshooter use automatic prompt caching (top-level `cach
 
 ## Test datasets
 
-- `examples/GSE164073/`, `examples/GSE157852/` — curated copies of counts-mode smoke runs (2026-09-30, analysis on Sonnet 5): prompt, design, provenance, both agents' tool logs, usage, report + figures, DE/enrichment results and `replay.py` (data paths repointed to `examples/<GSE>/` — the only edit; logs unchanged). Replaying either reproduces its report and `de_results.csv` exactly. Refresh by re-running the smoke test and copying the run folder without `geo/` and `run_state.json`.
+- `examples/GSE164073/`, `examples/GSE157852/` — curated copies of counts-mode smoke runs (2026-09-30, analysis on Sonnet 5.5, ~$0.23–0.25 each): prompt, design, provenance, both agents' tool logs, usage, report + figures, DE/enrichment results and `replay.py` (data paths repointed to `examples/<GSE>/` — the only edit; logs unchanged). Replaying either reproduces its report and `de_results.csv` exactly. Refresh by re-running the smoke test and copying the run folder without `geo/` and `run_state.json`.
 - `examples/smoke/` — the three smoke-test prompts (below). Older ad-hoc examples (GSE245856, demo/yeast/Drosophila FASTQs) were moved out of git to `data/legacy_examples/` (gitignored, local data kept).
 
 ## Current status (2026-09-23)
@@ -92,7 +92,7 @@ Agent loops and the troubleshooter use automatic prompt caching (top-level `cach
 2. `GSE164073_counts` (counts mode, hidden `tissue` covariate) — **passing**; both models add `covariates=["tissue"]` unprompted.
 3. `GSE246386_full` (full pipeline: download → samplesheet → nextflow salmon-only → analysis, 6 paired-end runs, 5.49 GB) — **in progress**. Download (12 files, MD5-verified) and samplesheet (approved; names match GEO titles) are done. The first samplesheet attempt exposed the `save_samplesheet` schema/signature mismatch and the LLM path relay (both fixed), and the first submission set `max_memory` 32 GB against Docker's 23.4 GB (prompt and tool check fixed). Next: delete the run's `params.json`, `--resume`, confirm `save_reference: true` in `nf_params.yml`, approve. This first nextflow run builds the GRCh38 Salmon index and should populate `data/reference/GRCh38/nf-core-rnaseq-3.26.0/`; the next Salmon-only run is the first real test of reuse.
 
-**Model comparison** (same decisions on both datasets): Haiku ~$0.09–0.12 per counts-mode dataset, Sonnet ~$0.28–0.31. Sonnet writes longer reports and types more numbers by hand; Haiku made one rounding slip before the relevant facts existed. Decision: Haiku for the counts/download/samplesheet/submission agents, Sonnet 5 for the analysis agent (report prose quality; ~$0.35–0.45 per counts-mode run, not yet measured); samplesheet-agent model still open.
+**Model comparison** (same decisions on both datasets): Haiku ~$0.09–0.12 per counts-mode dataset, Sonnet ~$0.28–0.31. Sonnet writes longer reports and types more numbers by hand; Haiku made one rounding slip before the relevant facts existed. Decision: Haiku for the counts/download/samplesheet/submission agents, Sonnet for the analysis agent (report prose quality; ~$0.23–0.25 per counts-mode run on Sonnet 5.5, 2026-09-30; more restrained, better-hedged reports than Sonnet 5); samplesheet-agent model still open.
 
 **Next steps**
 
