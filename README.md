@@ -219,8 +219,12 @@ results before relying on them.
 - Enrichment uses the Enrichr web API, so it depends on the network and on Enrichr's
   rate limits.
 
-**Planned:**
-- A separate review agent that flags unsupported claims in the report prose.
+## To do
+
+- **Review agent.** A separate agent checks every claim in the finished report against
+  the results, GEO metadata and fetched abstracts, and flags anything unsupported (e.g.
+  gene roles stated from memory, or counts called "reads") next to the sentence, without
+  editing the text.
 - A benchmark of about 10 varied GEO datasets with expected answers, scored per stage
   and per model.
 - A Streamlit UI for people who don't use the command line.
