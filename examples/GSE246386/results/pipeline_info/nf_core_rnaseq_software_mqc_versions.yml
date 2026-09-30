@@ -1,0 +1,30 @@
+CUSTOM_GTFFILTER:
+  python: 3.9.5
+CUSTOM_TX2GENE:
+  python: 3.10.4
+DESEQ2_QC_PSEUDO:
+  bioconductor-deseq2: 1.46.0
+  r-base: 4.4.2
+EAUTILS_GTF2BED:
+  perl: 5.26.2
+FASTQC:
+  fastqc: 0.12.1
+FQ_LINT:
+  fq: 0.12.0
+FQ_LINT_AFTER_TRIMMING:
+  fq: 0.12.0
+FQ_SUBSAMPLE:
+  fq: 0.12.0
+SALMON_QUANT:
+  salmon: 1.10.3
+SE_GENE_UNIFIED:
+  bioconductor-summarizedexperiment: 1.32.0
+SE_TRANSCRIPT_UNIFIED:
+  bioconductor-summarizedexperiment: 1.32.0
+TRIMGALORE:
+  trimgalore: 2.1.0
+TXIMETA_TXIMPORT:
+  bioconductor-tximeta: 1.20.1
+Workflow:
+    nf-core/rnaseq: v3.26.0-ge7ca462
+    Nextflow: 26.04.6

@@ -1,0 +1,4 @@
+{"agent": "download", "model": "claude-haiku-4-5-20251001", "requests": 3, "input_tokens": 7402, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0, "output_tokens": 765, "estimated_cost_usd": 0.0112}
+{"agent": "samplesheet", "model": "claude-haiku-4-5-20251001", "requests": 14, "input_tokens": 10555, "cache_creation_input_tokens": 8814, "cache_read_input_tokens": 58604, "output_tokens": 3168, "estimated_cost_usd": 0.0433}
+{"agent": "submission", "model": "claude-haiku-4-5-20251001", "requests": 3, "input_tokens": 8119, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0, "output_tokens": 802, "estimated_cost_usd": 0.0121}
+{"agent": "analysis", "model": "claude-sonnet-5-5", "requests": 12, "input_tokens": 26, "cache_creation_input_tokens": 51116, "cache_read_input_tokens": 250806, "output_tokens": 6975, "estimated_cost_usd": 0.2478}

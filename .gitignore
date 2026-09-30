@@ -18,6 +18,9 @@ examples/*/staged/
 examples/*/samplesheet.csv
 examples/*/counts.csv
 examples/*/results/
+# ...except the curated full-pipeline example (trimmed to what the report and replay read)
+!examples/GSE246386/samplesheet.csv
+!examples/GSE246386/results/
 
 # uv
 .uv/

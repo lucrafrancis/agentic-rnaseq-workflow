@@ -1,0 +1,149 @@
+{
+  "accession": "GSE246386",
+  "runs": [
+    {
+      "run_accession": "SRR26539596",
+      "experiment_accession": "SRX22242371",
+      "library_layout": "PAIRED",
+      "sample_alias": "GSM7868168",
+      "sample_title": "CD34+ iPSC-HE, day4, GFI1B#1",
+      "files": [
+        {
+          "filename": "SRR26539596_1.fastq.gz",
+          "url": "http://ftp.sra.ebi.ac.uk/vol1/fastq/SRR265/096/SRR26539596/SRR26539596_1.fastq.gz",
+          "md5": "4fb3d205cfb96e25389d651f3f68bb34",
+          "bytes": 428301240,
+          "aspera": "fasp.sra.ebi.ac.uk:/vol1/fastq/SRR265/096/SRR26539596/SRR26539596_1.fastq.gz"
+        },
+        {
+          "filename": "SRR26539596_2.fastq.gz",
+          "url": "http://ftp.sra.ebi.ac.uk/vol1/fastq/SRR265/096/SRR26539596/SRR26539596_2.fastq.gz",
+          "md5": "87fb9650265d97e998ad0045fc37cbda",
+          "bytes": 443029902,
+          "aspera": "fasp.sra.ebi.ac.uk:/vol1/fastq/SRR265/096/SRR26539596/SRR26539596_2.fastq.gz"
+        }
+      ],
+      "total_bytes": 871331142
+    },
+    {
+      "run_accession": "SRR26539597",
+      "experiment_accession": "SRX22242370",
+      "library_layout": "PAIRED",
+      "sample_alias": "GSM7868167",
+      "sample_title": "CD34+ iPSC-HE, day4, EV#3",
+      "files": [
+        {
+          "filename": "SRR26539597_1.fastq.gz",
+          "url": "http://ftp.sra.ebi.ac.uk/vol1/fastq/SRR265/097/SRR26539597/SRR26539597_1.fastq.gz",
+          "md5": "680ff7b440526cf0c27f82a2e06b0e72",
+          "bytes": 438015408,
+          "aspera": "fasp.sra.ebi.ac.uk:/vol1/fastq/SRR265/097/SRR26539597/SRR26539597_1.fastq.gz"
+        },
+        {
+          "filename": "SRR26539597_2.fastq.gz",
+          "url": "http://ftp.sra.ebi.ac.uk/vol1/fastq/SRR265/097/SRR26539597/SRR26539597_2.fastq.gz",
+          "md5": "0e13635dfff0ea16c385c03e9e64c281",
+          "bytes": 449742682,
+          "aspera": "fasp.sra.ebi.ac.uk:/vol1/fastq/SRR265/097/SRR26539597/SRR26539597_2.fastq.gz"
+        }
+      ],
+      "total_bytes": 887758090
+    },
+    {
+      "run_accession": "SRR26539598",
+      "experiment_accession": "SRX22242369",
+      "library_layout": "PAIRED",
+      "sample_alias": "GSM7868166",
+      "sample_title": "CD34+ iPSC-HE, day4, EV#2",
+      "files": [
+        {
+          "filename": "SRR26539598_1.fastq.gz",
+          "url": "http://ftp.sra.ebi.ac.uk/vol1/fastq/SRR265/098/SRR26539598/SRR26539598_1.fastq.gz",
+          "md5": "92781270700c02377e91611452a41a60",
+          "bytes": 468926800,
+          "aspera": "fasp.sra.ebi.ac.uk:/vol1/fastq/SRR265/098/SRR26539598/SRR26539598_1.fastq.gz"
+        },
+        {
+          "filename": "SRR26539598_2.fastq.gz",
+          "url": "http://ftp.sra.ebi.ac.uk/vol1/fastq/SRR265/098/SRR26539598/SRR26539598_2.fastq.gz",
+          "md5": "a527d8d036aa9d59e61c8a4cabfe2104",
+          "bytes": 484061027,
+          "aspera": "fasp.sra.ebi.ac.uk:/vol1/fastq/SRR265/098/SRR26539598/SRR26539598_2.fastq.gz"
+        }
+      ],
+      "total_bytes": 952987827
+    },
+    {
+      "run_accession": "SRR26539595",
+      "experiment_accession": "SRX22242372",
+      "library_layout": "PAIRED",
+      "sample_alias": "GSM7868169",
+      "sample_title": "CD34+ iPSC-HE, day4, GFI1B#2",
+      "files": [
+        {
+          "filename": "SRR26539595_1.fastq.gz",
+          "url": "http://ftp.sra.ebi.ac.uk/vol1/fastq/SRR265/095/SRR26539595/SRR26539595_1.fastq.gz",
+          "md5": "7a7762e75a32b2ad49d5aaa8aedaf2a8",
+          "bytes": 473953570,
+          "aspera": "fasp.sra.ebi.ac.uk:/vol1/fastq/SRR265/095/SRR26539595/SRR26539595_1.fastq.gz"
+        },
+        {
+          "filename": "SRR26539595_2.fastq.gz",
+          "url": "http://ftp.sra.ebi.ac.uk/vol1/fastq/SRR265/095/SRR26539595/SRR26539595_2.fastq.gz",
+          "md5": "a7287957873611a9227041e72d27335d",
+          "bytes": 491248456,
+          "aspera": "fasp.sra.ebi.ac.uk:/vol1/fastq/SRR265/095/SRR26539595/SRR26539595_2.fastq.gz"
+        }
+      ],
+      "total_bytes": 965202026
+    },
+    {
+      "run_accession": "SRR26539594",
+      "experiment_accession": "SRX22242373",
+      "library_layout": "PAIRED",
+      "sample_alias": "GSM7868170",
+      "sample_title": "CD34+ iPSC-HE, day4, GFI1B#3",
+      "files": [
+        {
+          "filename": "SRR26539594_1.fastq.gz",
+          "url": "http://ftp.sra.ebi.ac.uk/vol1/fastq/SRR265/094/SRR26539594/SRR26539594_1.fastq.gz",
+          "md5": "e0d36d23205eb9b304f566d6e39de138",
+          "bytes": 574647696,
+          "aspera": "fasp.sra.ebi.ac.uk:/vol1/fastq/SRR265/094/SRR26539594/SRR26539594_1.fastq.gz"
+        },
+        {
+          "filename": "SRR26539594_2.fastq.gz",
+          "url": "http://ftp.sra.ebi.ac.uk/vol1/fastq/SRR265/094/SRR26539594/SRR26539594_2.fastq.gz",
+          "md5": "436ae045137f2f4878e08d8231b28a9b",
+          "bytes": 595522153,
+          "aspera": "fasp.sra.ebi.ac.uk:/vol1/fastq/SRR265/094/SRR26539594/SRR26539594_2.fastq.gz"
+        }
+      ],
+      "total_bytes": 1170169849
+    },
+    {
+      "run_accession": "SRR26539599",
+      "experiment_accession": "SRX22242368",
+      "library_layout": "PAIRED",
+      "sample_alias": "GSM7868165",
+      "sample_title": "CD34+ iPSC-HE, day4, EV#1",
+      "files": [
+        {
+          "filename": "SRR26539599_1.fastq.gz",
+          "url": "http://ftp.sra.ebi.ac.uk/vol1/fastq/SRR265/099/SRR26539599/SRR26539599_1.fastq.gz",
+          "md5": "3d1d13e60e567f90b682c2c0ee19d18c",
+          "bytes": 516346686,
+          "aspera": "fasp.sra.ebi.ac.uk:/vol1/fastq/SRR265/099/SRR26539599/SRR26539599_1.fastq.gz"
+        },
+        {
+          "filename": "SRR26539599_2.fastq.gz",
+          "url": "http://ftp.sra.ebi.ac.uk/vol1/fastq/SRR265/099/SRR26539599/SRR26539599_2.fastq.gz",
+          "md5": "dcb287c789fcea90e4abe6000c22e043",
+          "bytes": 533437187,
+          "aspera": "fasp.sra.ebi.ac.uk:/vol1/fastq/SRR265/099/SRR26539599/SRR26539599_2.fastq.gz"
+        }
+      ],
+      "total_bytes": 1049783873
+    }
+  ]
+}
