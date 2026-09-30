@@ -5,7 +5,7 @@ description = "An agentic LLM workflow that builds sample sheets and submits nf-
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "anthropic>=0.40",
     "pandas>=2.0",

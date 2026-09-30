@@ -888,16 +888,13 @@ def _abstract_genes() -> list[tuple[str, list[str]]]:
     only all-caps or digit-containing words (so ordinary words aren't taken for genes)."""
     if not SESSION.references or SESSION.counts_df is None:
         return []
-    universe = set(map(str, SESSION.counts_df.index))
-    if SESSION.gene_names is not None:
-        universe |= set(SESSION.gene_names.dropna().astype(str))
+    universe = _gene_universe()
     found: dict[str, list[str]] = {}
     for pmid, ref in SESSION.references.items():
-        for token in re.findall(r"[A-Za-z0-9][A-Za-z0-9-]*[A-Za-z0-9]", ref.get("abstract") or ""):
-            if token in universe and (token.isupper() or any(c.isdigit() for c in token)):
-                found.setdefault(token, [])
-                if pmid not in found[token]:
-                    found[token].append(pmid)
+        for token in _gene_tokens(ref.get("abstract") or "", universe):
+            found.setdefault(token, [])
+            if pmid not in found[token]:
+                found[token].append(pmid)
     return list(found.items())
 
 
@@ -1031,8 +1028,11 @@ def _data_provenance() -> tuple[str, dict[str, Any]]:
         if quant and counts_path and quant.resolve() in counts_path.parents:
             return "nf-core/rnaseq", {"quantification": method, "counts_file": str(counts_path)}
 
-    if counts_path and paths and paths.counts_metadata.is_file() and counts_path == paths.counts_matrix.resolve():
-        meta = _json.loads(paths.counts_metadata.read_text())
+    # The provenance file sits next to the counts it describes — in this run's directory, or
+    # in the original run's (or examples/) when a replay loads the counts from there.
+    meta_path = counts_path.parent / paths.counts_metadata.name if counts_path and paths else None
+    if meta_path and meta_path.is_file() and counts_path.name == paths.counts_matrix.name:
+        meta = _json.loads(meta_path.read_text())
         return "GEO count matrix", {
             "accession": meta["accession"],
             "source": "authors' supplementary file" if meta["source"] == "author"
@@ -1186,15 +1186,41 @@ def _sample_correlation() -> pd.DataFrame:
     return np.log2(SESSION.counts_df.astype(float) + 1).corr(method="pearson")
 
 
+def _correlation_range() -> tuple[float, float]:
+    """Lowest and highest correlation between two different samples (the diagonal is 1)."""
+    values = _sample_correlation().to_numpy()
+    off_diagonal = values[~np.eye(len(values), dtype=bool)]
+    return float(off_diagonal.min()), float(off_diagonal.max())
+
+
 def _qc_before_filtering() -> bool:
     """Library sizes and genes detected come from a compute_qc run before filtering."""
     return (SESSION.qc_snapshot is not None and not SESSION.qc_snapshot["filtered"]
             and SESSION.filter_settings is not None)
 
 
+def _deseq_covariates() -> list[str]:
+    """Covariates of the fitted DESeq2 design (``~a + b + condition`` -> ``[a, b]``)."""
+    if not SESSION.deseq_design:
+        return []
+    return [c.strip() for c in str(SESSION.deseq_design).lstrip("~").split("+")][:-1]
+
+
+def _r2(values: pd.Series, labels: pd.Series) -> float:
+    """Share of a PC's variance explained by a categorical design column."""
+    ss_total = float(((values - values.mean()) ** 2).sum())
+    ss_between = sum(len(v) * (v.mean() - values.mean()) ** 2 for _, v in values.groupby(labels))
+    return ss_between / ss_total if ss_total else 0.0
+
+
 def _pca_groups() -> dict[str, Any] | None:
     """Replicate spread and group separation on PC1-PC2 of the PCA figure, so the report
-    describes clustering from numbers rather than by eye."""
+    describes clustering from numbers rather than by eye.
+
+    When the DESeq2 design has covariates (e.g. tissue), groups are compared within each
+    covariate level: with three tissues dominating PC1, "closest condition centroid" over
+    all samples would flag half the samples as misclustered for a reason the model
+    already adjusts for."""
     counts, design = SESSION.counts_df, SESSION.design_df
     if counts is None or design is None or "condition" not in design.columns or counts.shape[1] < 3:
         return None
@@ -1205,38 +1231,57 @@ def _pca_groups() -> dict[str, Any] | None:
     cond = design.loc[xy.index, "condition"].astype(str)
     if cond.nunique() < 2:
         return None
-    centroids = xy.groupby(cond).mean()
+    covariates = [c for c in _deseq_covariates() if c in design.columns]
+    strata = (design.loc[xy.index, covariates].astype(str).agg(" / ".join, axis=1) if covariates
+              else pd.Series("", index=xy.index))
+    centroids = xy.groupby([strata, cond]).mean()  # one centroid per (covariate level, condition)
+    groups = sorted(cond.unique())
 
     def dist(sample, group) -> float:
-        return float(np.linalg.norm(xy.loc[sample] - centroids.loc[group]))
+        return float(np.linalg.norm(xy.loc[sample] - centroids.loc[(strata[sample], group)]))
 
-    spread = {g: float(np.mean([dist(s, g) for s in xy.index[cond == g]])) for g in centroids.index}
-    pairs = [(a, b, float(np.linalg.norm(centroids.loc[a] - centroids.loc[b])))
-             for i, a in enumerate(centroids.index) for b in centroids.index[i + 1:]]
+    spread = {g: float(np.mean([dist(s, g) for s in xy.index[cond == g]])) for g in groups}
+    pairs = []
+    for i, a in enumerate(groups):
+        for b in groups[i + 1:]:
+            d = [float(np.linalg.norm(centroids.loc[(st, a)] - centroids.loc[(st, b)]))
+                 for st in strata.unique() if (st, a) in centroids.index and (st, b) in centroids.index]
+            if d:
+                pairs.append((a, b, float(np.mean(d))))
+    if not pairs:
+        return None
     closest = min(pairs, key=lambda p: p[2])
-    misclustered = {s: min(centroids.index, key=lambda g: dist(s, g)) for s in xy.index}
-    misclustered = {s: g for s, g in misclustered.items() if g != cond[s]}
-    r2 = {}
-    for pc in ("PC1", "PC2"):
-        v = xy[pc]
-        ss_total = float(((v - v.mean()) ** 2).sum())
-        ss_between = sum(len(v[cond == g]) * (v[cond == g].mean() - v.mean()) ** 2 for g in centroids.index)
-        r2[pc] = ss_between / ss_total if ss_total else 0.0
-    return {"spread": spread, "closest_pair": closest, "misclustered": misclustered, "condition_r2": r2}
+    misclustered = {}
+    for s in xy.index:
+        candidates = [g for g in groups if (strata[s], g) in centroids.index]
+        if len(candidates) > 1 and (nearest := min(candidates, key=lambda g: dist(s, g))) != cond[s]:
+            misclustered[s] = nearest
+    r2 = {pc: _r2(xy[pc], cond) for pc in ("PC1", "PC2")}
+    covariate_r2 = {c: {pc: _r2(xy[pc], design.loc[xy.index, c].astype(str)) for pc in ("PC1", "PC2")}
+                    for c in covariates}
+    return {"spread": spread, "closest_pair": closest, "misclustered": misclustered, "condition_r2": r2,
+            "covariates": covariates, "covariate_r2": covariate_r2}
 
 
 def _pca_summary(groups: dict[str, Any]) -> str:
-    spread = groups["spread"]
+    spread, covariates = groups["spread"], groups.get("covariates", [])
     a, b, d = groups["closest_pair"]
-    what = "group centroids are" if len(spread) == 2 else f"the closest group centroids ({a}, {b}) are"
+    within = f" within each {' / '.join(covariates)} level" if covariates else ""
+    what = ("group centroids are" if len(spread) == 2 else f"the closest group centroids ({a}, {b}) are")
+    if covariates:
+        what += " on average"
     mis = ", ".join(f"{s} (closer to {g})" for s, g in groups["misclustered"].items()) or "none"
-    text = ("On PC1–PC2, mean distance of replicates to their group centroid: "
-            + ", ".join(f"{g} {v:.1f}" for g, v in spread.items()) + f"; {what} {d:.1f} apart.")
+    text = (f"On PC1–PC2{within} (DESeq2 covariate{'s' if len(covariates) > 1 else ''}), " if covariates
+            else "On PC1–PC2, ")
+    text += ("mean distance of replicates to their group centroid: "
+             + ", ".join(f"{g} {v:.1f}" for g, v in spread.items()) + f"; {what} {d:.1f} apart.")
     if min(spread.values()) > 0:
         text += f" The most spread group is {max(spread.values()) / min(spread.values()):.1f}× the least spread."
-    return (text + f" Condition explains {groups['condition_r2']['PC1']:.0%} of PC1 and "
-            f"{groups['condition_r2']['PC2']:.0%} of PC2 variance. Samples closer to another group's "
-            f"centroid: {mis}.")
+    text += (f" Condition explains {groups['condition_r2']['PC1']:.0%} of PC1 and "
+             f"{groups['condition_r2']['PC2']:.0%} of PC2 variance")
+    for c, r2 in groups.get("covariate_r2", {}).items():
+        text += f"; {c} explains {r2['PC1']:.0%} and {r2['PC2']:.0%}"
+    return text + f". Samples closer to another group's centroid{within}: {mis}."
 
 
 def _reference_provenance() -> dict[str, str]:
@@ -1317,7 +1362,7 @@ def _methods() -> str:
 
     if SESSION.deseq_results is not None:
         factor, test, ref_level = SESSION.deseq_contrast
-        covariates = [c.strip() for c in str(SESSION.deseq_design).lstrip("~").split("+")][:-1]
+        covariates = _deseq_covariates()
         text = ""
         if SESSION.deseq_rounded_pct is not None:
             text += (f"Non-integer estimated counts ({SESSION.deseq_rounded_pct}% of values) were rounded "
@@ -1396,7 +1441,9 @@ def _facts() -> dict[str, str]:
             f["qc.pca_pc1_pct"] = f"{pca['var_exp'][0]:.1%}"
             if pca["n_pcs"] > 1:
                 f["qc.pca_pc2_pct"] = f"{pca['var_exp'][1]:.1%}"
-            f["qc.sample_correlation_min"] = f"{_sample_correlation().values.min():.2f}"
+            corr_min, corr_max = _correlation_range()
+            f["qc.sample_correlation_min"] = f"{corr_min:.2f}"
+            f["qc.sample_correlation_max"] = f"{corr_max:.2f}"
         groups = _pca_groups()
         if groups:
             for g, v in groups["spread"].items():
@@ -1405,6 +1452,9 @@ def _facts() -> dict[str, str]:
             f["qc.pca_condition_r2_pc1"] = f"{groups['condition_r2']['PC1']:.0%}"
             f["qc.pca_condition_r2_pc2"] = f"{groups['condition_r2']['PC2']:.0%}"
             f["qc.pca_misclustered"] = ", ".join(groups["misclustered"]) or "none"
+            for c, r2 in groups["covariate_r2"].items():
+                f[f"qc.pca_r2_pc1.{_key(c)}"] = f"{r2['PC1']:.0%}"
+                f[f"qc.pca_r2_pc2.{_key(c)}"] = f"{r2['PC2']:.0%}"
             f["qc.pca_summary"] = _pca_summary(groups)
     for k, v in _reference_provenance().items():
         if k in ("genome", "annotation", "annotation_provider"):
@@ -1757,7 +1807,7 @@ def _draw_figures(pca_color_by: list[str]) -> list[dict]:
         ax.spines["bottom"].set_visible(False)
         _save(fig, "sample_correlation.png",
               f"Pearson correlation of log2(counts + 1) between all {n} samples "
-              f"(range {corr.values.min():.2f}–1.00).")
+              "(range {:.2f}–{:.2f} between different samples).".format(*_correlation_range()))
 
     # --- Volcano plot ---
     if SESSION.deseq_results is not None:
@@ -1915,6 +1965,8 @@ def generate_figures(pca_color_by: list[str] | None = None) -> Summary:
 
 
 _PLACEHOLDER = re.compile(r"\{\{\s*([^{}]+?)\s*\}\}")
+# A placeholder plus a "%" or "." typed right after it, for the "{{de.pct_up}}%" fix in write_report.
+_PLACEHOLDER_END = re.compile(_PLACEHOLDER.pattern + r"([%.]?)")
 _HEADING = re.compile(r"^(#{1,6})\s+(.*)$", re.MULTILINE)
 _METHODS_ONLY = re.compile(r"\{\{\s*table:(methods|versions)\s*\}\}")
 
@@ -1973,6 +2025,105 @@ def _methods_prose(report_markdown: str) -> list[str]:
         if _METHODS_ONLY.sub("", report_markdown[h.end():end]).strip():
             bad.append(h.group(0).strip())
     return bad
+
+
+# A number standing on its own: not part of a gene, accession or term ID (CXCL8, GSE164073,
+# GO:0006954, SARS-CoV-2, PC1) or gene shorthand (S100A8/9). Percent signs and thousands
+# separators are included in the match.
+_BARE_NUMBER = re.compile(r"(?<![\w\-.,+:/])\d+(?:[.,]\d+)*(?:\s?%)?(?![\w])")
+_LINE_PREFIX = re.compile(r"^\s*(?:#{1,6}\s+\d+(?:\.\d+)*\.?|\d+\.)\s")  # "## 2. QC", "1. item"
+_MAX_LISTED = 15
+
+
+def _prose_lines(report_markdown: str) -> list[str]:
+    """Report lines with placeholders blanked out, skipping figure links."""
+    return [_PLACEHOLDER.sub(" ", line) for line in report_markdown.splitlines()
+            if not line.lstrip().startswith("![")]
+
+
+def _stray_numbers(report_markdown: str) -> list[str]:
+    """Numbers the LLM typed itself instead of rendering them from a placeholder. Design
+    labels that contain numbers ("SARS-CoV-2, MOI = 1.0", "24 hours") may be written out."""
+    labels = set()
+    if SESSION.design_df is not None:
+        for v in map(str, SESSION.design_df.to_numpy().ravel()):
+            # the whole label and each comma-separated part: "MOI = 1.0" on its own is fine too
+            labels |= {p.strip() for p in [v, *v.split(",")] if re.search(r"\d", p)}
+    stray = []
+    for line in _prose_lines(report_markdown):
+        text = _LINE_PREFIX.sub(" ", line)
+        for label in sorted(labels, key=len, reverse=True):
+            text = text.replace(label, " ")
+        for m in _BARE_NUMBER.finditer(text):
+            context = text[max(0, m.start() - 30): m.end() + 15].strip()
+            stray.append(f"'{m.group(0)}' in \"...{context}...\"")
+    stray = list(dict.fromkeys(stray))
+    out = [f"number typed directly — use a placeholder or drop it: {s}" for s in stray[:_MAX_LISTED]]
+    if len(stray) > _MAX_LISTED:
+        out.append(f"... and {len(stray) - _MAX_LISTED} more typed numbers")
+    return out
+
+
+def _gene_universe() -> set[str]:
+    """Gene IDs and symbols in the loaded data."""
+    if SESSION.counts_df is None:
+        return set()
+    universe = set(map(str, SESSION.counts_df.index))
+    if SESSION.gene_names is not None:
+        universe |= set(SESSION.gene_names.dropna().astype(str))
+    return universe
+
+
+def _gene_tokens(text: str, universe: set[str]) -> list[str]:
+    """Words that are genes in the data. Only all-caps or digit-containing words count, so
+    ordinary words aren't taken for genes."""
+    return [t for t in re.findall(r"[A-Za-z0-9][A-Za-z0-9-]*[A-Za-z0-9]", text)
+            if t in universe and (t.isupper() or any(c.isdigit() for c in t))]
+
+
+def _placeholder_terms(key: str) -> tuple[str, set[str]] | None:
+    """(term name, its genes) for an enrichment placeholder: a ranked fact such as
+    enrichment.up.go_bp.1, or {{term:up:NAME}}."""
+    labels = {"up": "upregulated", "down": "downregulated"}
+    if m := re.fullmatch(r"enrichment\.(up|down)\.(\w+)\.(\d+)", key):
+        entry = (SESSION.enrichment_results or {}).get(labels[m.group(1)]) or {}
+        for gs, terms in entry.get("results", {}).items():
+            if _library_key(gs) == m.group(2) and int(m.group(3)) <= len(terms):
+                term = terms[int(m.group(3)) - 1]
+                return term["term"], set(term["genes"].split(";"))
+        return None
+    kind, _, arg = key.partition(":")
+    direction, _, name = arg.partition(":")
+    if kind != "term" or direction not in labels or (table := _enrichment_table(labels[direction])) is None:
+        return None
+    hits = table[table["Term"].str.lower() == name.strip().lower()]
+    return (str(hits.iloc[0]["Term"]), set(str(hits.iloc[0]["Genes"]).split(";"))) if len(hits) else None
+
+
+def _term_gene_problems(report_markdown: str) -> list[str]:
+    """A gene named in the same sentence as an enrichment term must be one of that term's
+    genes — e.g. listing keratins as "driving" a term they aren't part of. Genes written as
+    {{gene:SYMBOL}} are exempt: they carry their own statistics."""
+    universe = _gene_universe()
+    problems = []
+    for line in report_markdown.splitlines():
+        if line.lstrip().startswith(("![", "|", "#")):
+            continue
+        for sentence in re.split(r"(?<=[.!?])\s+(?=[A-Z{(*])", line):
+            terms = [t for k in _PLACEHOLDER.findall(sentence) if (t := _placeholder_terms(k))]
+            if not terms:
+                continue
+            allowed = {g.upper() for _, genes in terms for g in genes}
+            names = " / ".join(dict.fromkeys(name for name, _ in terms))
+            for gene in dict.fromkeys(_gene_tokens(_PLACEHOLDER.sub(" ", sentence), universe)):
+                if gene.upper() not in allowed:
+                    problems.append(
+                        f"'{gene}' is named with '{names}' but is not one of its genes "
+                        f"({', '.join(sorted(g for _, genes in terms for g in genes))}). Name only the "
+                        f"term's genes there, or give {gene} its own sentence as {{{{gene:{gene}}}}}.")
+    return list(dict.fromkeys(problems))
+
+
 _MAX_REPORT_REJECTIONS = 2
 
 
@@ -2069,6 +2220,8 @@ def write_report(report_markdown: str) -> Summary:
 
     def _placeholder(m: re.Match) -> str:
         key = m.group(1)
+        if key.startswith("fact.") and key[len("fact."):] in facts:
+            key = key[len("fact."):]  # lossless: "{{fact.de.design}}" means {{de.design}}
         kind, _, arg = key.partition(":")
         if kind == "table" and arg in tables:
             placed_tables.add(arg)
@@ -2100,9 +2253,19 @@ def write_report(report_markdown: str) -> Summary:
                  "what the tools did. Move other text (e.g. why a covariate was dropped) to Limitations "
                  "or the relevant results section." for h in _methods_prose(report_markdown)]
     problems += _interpretation_problems(report_markdown)
+    problems += _stray_numbers(report_markdown)
+    problems += _term_gene_problems(report_markdown)
+    problems += [f"{{{{{m.group(1)}}}}} must be on a line of its own — a table can't go inside a sentence "
+                 "or list item; refer to it in words instead (e.g. \"the table below\")."
+                 for line in report_markdown.splitlines() for m in _PLACEHOLDER.finditer(line)
+                 if m.group(1).startswith("table:") and line.strip() != m.group(0)]
     report = _BARE_IMAGE.sub(_bare_image, report_markdown)
     report = _IMAGE_LINK.sub(_figure, report)
-    report = _PLACEHOLDER.sub(_placeholder, report)
+    # Lossless: facts may already end in "%" or ".", so "{{de.pct_up}}%" must not print "%%"
+    # and "{{qc.pca_summary}}." must not print "..".
+    report = _PLACEHOLDER_END.sub(
+        lambda m: (out := _placeholder(m)) + ("" if m.group(2) and out.endswith(m.group(2)) else m.group(2)),
+        report)
     missing = [t for t in _required_tables() if t not in placed_tables]
     problems += [f"required table not placed: {{{{table:{t}}}}}" for t in missing]
     missing_figs = [f for f in SESSION.figures if f["path"] not in referenced]

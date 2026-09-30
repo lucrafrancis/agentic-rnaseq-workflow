@@ -26,6 +26,7 @@ def run_agent_loop(
     log_path: Path | None = None,
     hide_args: frozenset[str] = frozenset(),
     label: str = "agent",
+    model: str | None = None,
 ) -> list[dict]:
     """Run an agent loop to completion.
 
@@ -47,7 +48,10 @@ def run_agent_loop(
         Tool argument keys to omit from the console display.
     label:
         Name recorded in the run's usage.jsonl.
+    model:
+        Model for this agent. Defaults to config.MODEL.
     """
+    model = model or config.MODEL
     if log_path is None:
         log_path = SESSION.require_paths().tool_log
 
@@ -57,7 +61,7 @@ def run_agent_loop(
 
     for _turn in range(config.MAX_TURNS):
         response = client.messages.create(
-            model=config.MODEL,
+            model=model,
             max_tokens=config.MAX_TOKENS,
             system=system_prompt,
             tools=tool_schemas,
@@ -98,7 +102,7 @@ def run_agent_loop(
     else:
         print(f"\n⚠️  Agent used all {config.MAX_TURNS} turns without finishing.")
 
-    log_usage(label, config.MODEL, usage)
+    log_usage(label, model, usage)
     return messages
 
 
@@ -113,16 +117,30 @@ def add_usage(totals: dict[str, int], usage: Any) -> None:
         totals[key] += getattr(usage, key, None) or 0
 
 
+def estimate_cost(model: str, totals: dict[str, int]) -> float | None:
+    """Estimated USD cost from config prices; None for a model without a price."""
+    price = config.PRICE_PER_MTOK.get(model)
+    if price is None:
+        return None
+    cost = (totals["input_tokens"] * price["input"]
+            + totals["cache_creation_input_tokens"] * price["input"] * config.CACHE_WRITE_MULTIPLIER
+            + totals["cache_read_input_tokens"] * price["input"] * config.CACHE_READ_MULTIPLIER
+            + totals["output_tokens"] * price["output"])
+    return round(cost / 1e6, 4)
+
+
 def log_usage(label: str, model: str, totals: dict[str, int]) -> None:
     """Print a one-line token summary and append it to the run's usage.jsonl."""
     total_in = totals["input_tokens"] + totals["cache_creation_input_tokens"] + totals["cache_read_input_tokens"]
     cached_pct = 100 * totals["cache_read_input_tokens"] / total_in if total_in else 0
+    cost = estimate_cost(model, totals)
     print(f"\n📊 {label}: {totals['requests']} requests, {total_in:,} input tokens "
-          f"({cached_pct:.0f}% from cache), {totals['output_tokens']:,} output tokens")
+          f"({cached_pct:.0f}% from cache), {totals['output_tokens']:,} output tokens"
+          + (f", ~${cost:.2f}" if cost is not None else ""))
     if SESSION.paths is None:
         return
     with SESSION.paths.usage_log.open("a") as f:
-        f.write(json.dumps({"agent": label, "model": model, **totals}) + "\n")
+        f.write(json.dumps({"agent": label, "model": model, **totals, "estimated_cost_usd": cost}) + "\n")
 
 
 def _run_tool(
@@ -136,7 +154,20 @@ def _run_tool(
         return {"error": type(exc).__name__, "message": str(exc)}
 
 
+def _repo_relative(value: Any) -> Any:
+    """Paths inside the repo, written relative to it: logs don't expose the local home
+    directory, and replay (which runs from the repo root) works from any clone."""
+    if isinstance(value, str):
+        return value.replace(f"{config.ROOT}/", "")
+    if isinstance(value, dict):
+        return {k: _repo_relative(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_repo_relative(v) for v in value]
+    return value
+
+
 def _log_tool_call(log_path: Path, name: str, args: dict, summary: dict) -> None:
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    entry = _repo_relative({"tool": name, "args": args, "summary": summary})
     with log_path.open("a") as f:
-        f.write(json.dumps({"tool": name, "args": args, "summary": summary}) + "\n")
+        f.write(json.dumps(entry) + "\n")

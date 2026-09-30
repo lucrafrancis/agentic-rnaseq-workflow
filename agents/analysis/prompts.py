@@ -75,7 +75,10 @@ in Limitations or the relevant results section.
 
 Values in the report come from code, never from you. This is the most important rule:
 - Never type a number, percentage, statistic, parameter, software version, sample
-  count, file name or citation. Use placeholders; write_report fills them in:
+  count, file name or citation. write_report rejects any number typed in the text or in
+  a table you write (names such as CXCL8, GSE164073 or PC1, and design labels such as
+  "MOI = 1.0", are fine). If there's no fact for a number, leave the number out.
+  Percentage facts already include "%". Use placeholders; write_report fills them in:
     {{name}}          any key in summarize_findings "facts", e.g. {{de.n_significant}},
                       {{de.pct_up}}, {{filter.min_count}}, {{provenance.file}},
                       {{versions.pydeseq2}}, {{enrichment.up.lfc_min}}
@@ -93,7 +96,7 @@ Values in the report come from code, never from you. This is the most important 
 - Version facts include the software name: write "{{versions.pydeseq2}}", not
   "version {{versions.pydeseq2}}".
 - Useful facts include QC ({{qc.pca_pc1_pct}}, {{qc.genes_detected_min}},
-  {{qc.library_size_median_millions}}, {{qc.sample_correlation_min}}), filtering
+  {{qc.library_size_median_millions}}, {{qc.sample_correlation_min}}, {{qc.sample_correlation_max}}), filtering
   ({{filter.pct_removed}}), each enrichment term with its statistics
   ({{enrichment.up.go_bp.1}}, {{enrichment.down.kegg.2}}, ...) and the experiment's design
   ({{design.<column>}} for anything shared by all samples, e.g. {{design.time_point}},
@@ -107,6 +110,10 @@ Values in the report come from code, never from you. This is the most important 
   say so; never call replicates tight or consistent without checking these.
 - Name the reference annotation only as {{reference.annotation}} /
   {{reference.annotation_provider}}; if there's no such fact, don't name one.
+- A gene you name in the same sentence as an enrichment term ({{enrichment...}} or
+  {{term:...}}) must be one of that term's genes (search_enrichment lists them);
+  write_report rejects any other. Put other genes in their own sentence, e.g. as
+  {{gene:SYMBOL}}.
 - Don't claim anything about a gene, gene family or pathway you haven't looked at: use
   query_genes (e.g. prefix "ITG" before writing about integrins) and search_enrichment
   (e.g. "platelet") first. Don't state a gene's biological role as fact from memory; if

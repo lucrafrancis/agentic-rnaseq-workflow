@@ -43,11 +43,18 @@ def _git_commit() -> str:
     return f"{commit}-dirty" if dirty else commit
 
 
+def _relative(value):
+    """Paths inside the repo are written relative to it, so the script runs from any clone."""
+    root = f"{config.ROOT}/"
+    return value[len(root):] if isinstance(value, str) and value.startswith(root) else value
+
+
 def _format_call(name: str, args: dict) -> str:
     if not args:
         return f'_run("{name}")'
     lines = [f'_run(\n    "{name}",']
     for key, value in args.items():
+        value = _relative(value)
         formatted = pformat(value, width=88, compact=True, sort_dicts=False).replace("\n", "\n    ")
         lines.append(f"    {key}={formatted},")
     lines.append(")")
@@ -92,9 +99,10 @@ import os
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[3]  # runs/<run>/analysis/replay.py -> repo root
+# The repo this script sits in (runs/<run>/analysis/, or a copy under examples/)
+ROOT = next(p for p in Path(__file__).resolve().parents if (p / "pyproject.toml").exists())
 sys.path.insert(0, str(ROOT))
-os.chdir(ROOT)  # logged paths may be relative to the repo root
+os.chdir(ROOT)  # paths below are relative to the repo root
 
 from agents.analysis import tools
 from core.session import SESSION
